@@ -218,7 +218,7 @@ export function AppSidebar({
                 </div>
                 <div className="grid flex-1 text-left text-sm leading-tight">
                   <span className="truncate font-medium">SurfSense</span>
-                  <span className="truncate text-xs">beta v0.0.6</span>
+                  <span className="truncate text-xs">beta v0.0.7</span>
                 </div>
               </div>
             </SidebarMenuButton>
@@ -227,7 +227,7 @@ export function AppSidebar({
       </SidebarHeader>
       <SidebarContent>
         <NavMain items={processedNavMain} />
-        {processedRecentChats.length > 0 && <NavProjects projects={processedRecentChats} />}
+        {processedRecentChats.length > 0 && <NavProjects chats={processedRecentChats} />}
         <NavSecondary items={processedNavSecondary} className="mt-auto" />
       </SidebarContent>
       <SidebarFooter>

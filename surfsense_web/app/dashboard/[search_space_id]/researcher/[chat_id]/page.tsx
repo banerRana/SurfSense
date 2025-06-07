@@ -1,5 +1,5 @@
 "use client";
-import React, { useRef, useEffect, useState } from 'react';
+import React, { useRef, useEffect, useState, useMemo, useCallback } from 'react';
 import { useChat } from '@ai-sdk/react';
 import { useParams } from 'next/navigation';
 import {
@@ -15,7 +15,11 @@ import {
   Database,
   SendHorizontal,
   FileText,
-  Grid3x3
+  Grid3x3,
+  FolderOpen,
+  Upload,
+  ChevronDown,
+  Filter
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -31,13 +35,20 @@ import {
   DialogFooter
 } from "@/components/ui/dialog";
 import {
-  SegmentedControl,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
+import {
   ConnectorButton as ConnectorButtonComponent,
   getConnectorIcon,
-  getMainViewSources as getMainViewSourcesUtil,
   getFilteredSources as getFilteredSourcesUtil,
   getPaginatedDialogSources as getPaginatedDialogSourcesUtil,
-  getSourcesCount as getSourcesCountUtil,
   useScrollToBottom,
   updateScrollIndicators as updateScrollIndicatorsUtil,
   useScrollIndicators,
@@ -45,11 +56,12 @@ import {
   scrollTabsRight as scrollTabsRightUtil,
   Source,
   ResearchMode,
-  researcherOptions
+  ResearchModeControl
 } from '@/components/chat';
 import { MarkdownViewer } from '@/components/markdown-viewer';
 import { Logo } from '@/components/Logo';
 import { useSearchSourceConnectors } from '@/hooks';
+import { useDocuments } from '@/hooks/use-documents';
 
 interface SourceItem {
   id: number;
@@ -66,6 +78,78 @@ interface ConnectorSource {
   sources: SourceItem[];
 }
 
+type DocumentType = "EXTENSION" | "CRAWLED_URL" | "SLACK_CONNECTOR" | "NOTION_CONNECTOR" | "FILE" | "YOUTUBE_VIDEO" | "GITHUB_CONNECTOR" | "LINEAR_CONNECTOR" | "DISCORD_CONNECTOR";
+
+
+/**
+ * Skeleton loader for document items
+ */
+const DocumentSkeleton = () => (
+  <div className="flex items-start gap-3 p-3 rounded-md border">
+    <Skeleton className="flex-shrink-0 w-6 h-6 mt-0.5" />
+    <div className="flex-1 space-y-2">
+      <Skeleton className="h-4 w-3/4" />
+      <Skeleton className="h-3 w-1/2" />
+      <Skeleton className="h-3 w-full" />
+    </div>
+    <Skeleton className="flex-shrink-0 w-4 h-4" />
+  </div>
+);
+
+/**
+ * Enhanced document type filter dropdown
+ */
+const DocumentTypeFilter = ({ 
+  value, 
+  onChange, 
+  counts 
+}: { 
+  value: DocumentType | "ALL"; 
+  onChange: (value: DocumentType | "ALL") => void;
+  counts: Record<string, number>;
+}) => {
+  const getTypeLabel = (type: DocumentType | "ALL") => {
+    if (type === "ALL") return "All Types";
+    return type.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, l => l.toUpperCase());
+  };
+
+  const getTypeIcon = (type: DocumentType | "ALL") => {
+    if (type === "ALL") return <Filter className="h-4 w-4" />;
+    return getConnectorIcon(type);
+  };
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="outline" size="sm" className="h-8 gap-1">
+          {getTypeIcon(value)}
+          <span className="hidden sm:inline">{getTypeLabel(value)}</span>
+          <ChevronDown className="h-3 w-3" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-48">
+        <DropdownMenuLabel>Document Types</DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        {Object.entries(counts).map(([type, count]) => (
+          <DropdownMenuItem
+            key={type}
+            onClick={() => onChange(type as DocumentType | "ALL")}
+            className="flex items-center justify-between"
+          >
+            <div className="flex items-center gap-2">
+              {getTypeIcon(type as DocumentType | "ALL")}
+              <span>{getTypeLabel(type as DocumentType | "ALL")}</span>
+            </div>
+            <Badge variant="secondary" className="text-xs">
+              {count}
+            </Badge>
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+};
+
 /**
  * Button that displays selected connectors and opens connector selection dialog
  */
@@ -78,6 +162,41 @@ const ConnectorButton = ({ selectedConnectors, onClick }: { selectedConnectors: 
       onClick={onClick}
       connectorSources={connectorSourceItems}
     />
+  );
+};
+
+/**
+ * Button that displays selected documents count and opens document selection dialog
+ */
+const DocumentSelectorButton = ({ 
+  selectedDocuments, 
+  onClick, 
+  documentsCount 
+}: { 
+  selectedDocuments: number[], 
+  onClick: () => void,
+  documentsCount: number 
+}) => {
+  return (
+    <div className="relative">
+      <Button
+        variant="outline"
+        onClick={onClick}
+        className="h-8 px-2 text-xs font-medium transition-colors border-border bg-background hover:bg-muted/50"
+      >
+        <FolderOpen className="h-3 w-3" />
+      </Button>
+      {selectedDocuments.length > 0 && (
+        <span className="absolute -top-1 -right-1 h-4 w-4 rounded-full bg-primary text-primary-foreground text-xs font-medium flex items-center justify-center leading-none">
+          {selectedDocuments.length > 99 ? '99+' : selectedDocuments.length}
+        </span>
+      )}
+      {selectedDocuments.length === 0 && (
+        <span className="absolute -top-1 -right-1 h-4 w-4 rounded-full bg-muted text-muted-foreground text-xs font-medium flex items-center justify-center leading-none">
+          0
+        </span>
+      )}
+    </div>
   );
 };
 
@@ -186,8 +305,8 @@ const SourcesDialogContent = ({
       </div>
 
       <div className="space-y-3 mt-4">
-        {paginatedSources.map((source: any) => (
-          <Card key={source.id} className="p-3 hover:bg-gray-50 dark:hover:bg-gray-800 cursor-pointer">
+        {paginatedSources.map((source: any, index: number) => (
+          <Card key={`${connector.type}-${source.id}-${index}`} className="p-3 hover:bg-gray-50 dark:hover:bg-gray-800 cursor-pointer">
             <div className="flex items-start gap-3">
               <div className="flex-shrink-0 w-6 h-6 flex items-center justify-center">
                 {getConnectorIcon(connector.type)}
@@ -248,9 +367,9 @@ const ChatPage = () => {
   const [sourceFilter, setSourceFilter] = useState("");
   const tabsListRef = useRef<HTMLDivElement>(null);
   const [terminalExpanded, setTerminalExpanded] = useState(false);
-  const [selectedConnectors, setSelectedConnectors] = useState<string[]>(["CRAWLED_URL"]);
+  const [selectedConnectors, setSelectedConnectors] = useState<string[]>([]);
   const [searchMode, setSearchMode] = useState<'DOCUMENTS' | 'CHUNKS'>('DOCUMENTS');
-  const [researchMode, setResearchMode] = useState<ResearchMode>("GENERAL");
+  const [researchMode, setResearchMode] = useState<ResearchMode>("QNA");
   const [currentTime, setCurrentTime] = useState<string>('');
   const [currentDate, setCurrentDate] = useState<string>('');
   const terminalMessagesRef = useRef<HTMLDivElement>(null);
@@ -259,6 +378,66 @@ const ChatPage = () => {
   const INITIAL_SOURCES_DISPLAY = 3;
 
   const { search_space_id, chat_id } = useParams();
+  
+  // Document selection state
+  const [selectedDocuments, setSelectedDocuments] = useState<number[]>([]);
+  const [documentFilter, setDocumentFilter] = useState("");
+  const [debouncedDocumentFilter, setDebouncedDocumentFilter] = useState("");
+  const [documentTypeFilter, setDocumentTypeFilter] = useState<DocumentType | "ALL">("ALL");
+  const [documentsPage, setDocumentsPage] = useState(1);
+  const [documentsPerPage] = useState(10);
+  const { documents, loading: isLoadingDocuments, error: documentsError } = useDocuments(Number(search_space_id));
+
+  // Debounced search effect (proper implementation)
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setDebouncedDocumentFilter(documentFilter);
+      setDocumentsPage(1); // Reset page when search changes
+    }, 300);
+
+    return () => {
+      clearTimeout(handler);
+    };
+  }, [documentFilter]);
+
+  // Memoized filtered and paginated documents
+  const filteredDocuments = useMemo(() => {
+    if (!documents) return [];
+    
+    return documents.filter(doc => {
+      const matchesSearch = doc.title.toLowerCase().includes(debouncedDocumentFilter.toLowerCase()) ||
+                           doc.content.toLowerCase().includes(debouncedDocumentFilter.toLowerCase());
+      const matchesType = documentTypeFilter === "ALL" || doc.document_type === documentTypeFilter;
+      return matchesSearch && matchesType;
+    });
+  }, [documents, debouncedDocumentFilter, documentTypeFilter]);
+
+  const paginatedDocuments = useMemo(() => {
+    const startIndex = (documentsPage - 1) * documentsPerPage;
+    return filteredDocuments.slice(startIndex, startIndex + documentsPerPage);
+  }, [filteredDocuments, documentsPage, documentsPerPage]);
+
+  const totalPages = Math.ceil(filteredDocuments.length / documentsPerPage);
+
+  // Document type counts for filter dropdown
+  const documentTypeCounts = useMemo(() => {
+    if (!documents) return {};
+    
+    const counts: Record<string, number> = { ALL: documents.length };
+    documents.forEach(doc => {
+      counts[doc.document_type] = (counts[doc.document_type] || 0) + 1;
+    });
+    return counts;
+  }, [documents]);
+
+  // Callback to handle document selection
+  const handleDocumentToggle = useCallback((documentId: number) => {
+    setSelectedDocuments(prev => 
+      prev.includes(documentId)
+        ? prev.filter(id => id !== documentId)
+        : [...prev, documentId]
+    );
+  }, []);
 
   // Function to scroll terminal to bottom
   const scrollTerminalToBottom = () => {
@@ -345,6 +524,13 @@ const ChatPage = () => {
           background-color: rgba(155, 155, 155, 0.5);
           border-radius: 20px;
         }
+        /* Line clamp utility */
+        .line-clamp-2 {
+          display: -webkit-box;
+          -webkit-line-clamp: 2;
+          -webkit-box-orient: vertical;
+          overflow: hidden;
+        }
       `;
       document.head.appendChild(style);
 
@@ -365,7 +551,8 @@ const ChatPage = () => {
         search_space_id: search_space_id,
         selected_connectors: selectedConnectors,
         research_mode: researchMode,
-        search_mode: searchMode
+        search_mode: searchMode,
+        document_ids_to_add_in_context: selectedDocuments
       }
     },
     onError: (error) => {
@@ -380,7 +567,7 @@ const ChatPage = () => {
       try {
         if (!token) return; // Wait for token to be set
 
-        console.log('Fetching chat details for chat ID:', chat_id);
+        // console.log('Fetching chat details for chat ID:', chat_id);
 
         const response = await fetch(`${process.env.NEXT_PUBLIC_FASTAPI_BACKEND_URL}/api/v1/chats/${Number(chat_id)}`, {
           method: 'GET',
@@ -395,7 +582,7 @@ const ChatPage = () => {
         }
 
         const chatData = await response.json();
-        console.log('Chat details fetched:', chatData);
+        // console.log('Chat details fetched:', chatData);
 
         // Set research mode from chat data
         if (chatData.type) {
@@ -445,7 +632,7 @@ const ChatPage = () => {
           const title = userMessages[0].content;
 
 
-          console.log('Updating chat with title:', title);
+          // console.log('Updating chat with title:', title);
 
           // Update the chat
           const response = await fetch(`${process.env.NEXT_PUBLIC_FASTAPI_BACKEND_URL}/api/v1/chats/${Number(chat_id)}`, {
@@ -467,7 +654,7 @@ const ChatPage = () => {
             throw new Error(`Failed to update chat: ${response.statusText}`);
           }
 
-          console.log('Chat updated successfully');
+          // console.log('Chat updated successfully');
         }
       } catch (err) {
         console.error('Error updating chat:', err);
@@ -522,12 +709,11 @@ const ChatPage = () => {
 
     if (!input.trim() || status !== 'ready') return;
 
-    // You can add additional logic here if needed
-    // For example, validation for selected connectors
-    if (selectedConnectors.length === 0) {
-      alert("Please select at least one connector");
-      return;
-    }
+    // Validation: require at least one connector OR at least one document
+    // if (selectedConnectors.length === 0 && selectedDocuments.length === 0) {
+    //   alert("Please select at least one connector or document");
+    //   return;
+    // }
 
     // Call the original handleSubmit from useChat
     handleChatSubmit(e);
@@ -798,7 +984,7 @@ const ChatPage = () => {
                         // Use these message-specific sources for the Tabs component
                         return (
                           <Tabs
-                            defaultValue={messageConnectorSources.length > 0 ? messageConnectorSources[0].type : "CRAWLED_URL"}
+                            defaultValue={messageConnectorSources.length > 0 ? messageConnectorSources[0].type : undefined}
                             className="w-full"
                           >
                             <div className="mb-4">
@@ -848,8 +1034,8 @@ const ChatPage = () => {
                             {messageConnectorSources.map(connector => (
                               <TabsContent key={connector.id} value={connector.type} className="mt-0">
                                 <div className="space-y-3">
-                                  {connector.sources?.slice(0, INITIAL_SOURCES_DISPLAY)?.map((source: any) => (
-                                    <Card key={source.id} className="p-3 hover:bg-gray-50 dark:hover:bg-gray-800 cursor-pointer">
+                                  {connector.sources?.slice(0, INITIAL_SOURCES_DISPLAY)?.map((source: any, index: number) => (
+                                    <Card key={`${connector.type}-${source.id}-${index}`} className="p-3 hover:bg-gray-50 dark:hover:bg-gray-800 cursor-pointer">
                                       <div className="flex items-start gap-3">
                                         <div className="flex-shrink-0 w-6 h-6 flex items-center justify-center">
                                           {getConnectorIcon(connector.type)}
@@ -957,37 +1143,336 @@ const ChatPage = () => {
           <form onSubmit={handleSubmit} className="flex items-center gap-3">
             <Input
               type="text"
-              placeholder={"Search about..."}
+              placeholder={status === 'streaming' ? "Thinking..." : "Search about..."}
               value={input}
               onChange={handleInputChange}
-              className="no-shadow-input border-0 focus-visible:ring-offset-0 focus-visible:ring-0 resize-none overflow-auto w-full flex-1 bg-transparent p-3 pb-1.5 text-sm outline-none placeholder:text-muted-foreground"
+              className={`no-shadow-input border-0 focus-visible:ring-offset-0 focus-visible:ring-0 resize-none overflow-auto w-full flex-1 bg-transparent p-3 pb-1.5 text-sm outline-none placeholder:text-muted-foreground transition-all duration-200 ${
+                status === 'streaming' 
+                  ? 'opacity-75 cursor-not-allowed animate-pulse' 
+                  : ''
+              }`}
               disabled={status !== 'ready'}
             />
             {/* Send button */}
             <Button
               variant="ghost"
               size="icon"
-              className="h-9 w-9 rounded-full hover:bg-primary/10 hover:text-primary transition-colors"
+              className={`h-9 w-9 rounded-full hover:bg-primary/10 hover:text-primary transition-all duration-200 ${
+                status === 'streaming' 
+                  ? 'cursor-not-allowed opacity-75' 
+                  : 'hover:scale-105'
+              }`}
               type="submit"
               disabled={status !== 'ready' || !input.trim()}
-              aria-label="Send message"
+              aria-label={status === 'streaming' ? 'Sending message' : 'Send message'}
             >
-              <SendHorizontal className="h-4 w-4 text-primary" />
-              <span className="sr-only">Send</span>
+              {status === 'streaming' ? (
+                <Loader2 className="h-4 w-4 text-primary animate-spin" />
+              ) : (
+                <SendHorizontal className="h-4 w-4 text-primary" />
+              )}
+              <span className="sr-only">
+                {status === 'streaming' ? 'Sending...' : 'Send'}
+              </span>
             </Button>
           </form>
           <div className="flex items-center justify-between px-2 py-2 mt-3">
-            <div className="flex items-center space-x-3">
-              {/* Connector Selection Dialog */}
-              <Dialog>
-                <DialogTrigger asChild>
-                  <div className="h-8">
-                    <ConnectorButton
-                      selectedConnectors={selectedConnectors}
-                      onClick={() => { }}
-                    />
+            <div className="flex items-center gap-2 flex-wrap">
+            {/* Enhanced Document Selection Dialog */}
+            <Dialog>
+              <DialogTrigger asChild>
+                <DocumentSelectorButton
+                  selectedDocuments={selectedDocuments}
+                  onClick={() => { }}
+                  documentsCount={documents?.length || 0}
+                />
+              </DialogTrigger>
+              <DialogContent className="sm:max-w-3xl max-h-[85vh] flex flex-col">
+                <DialogHeader className="flex-shrink-0">
+                  <DialogTitle className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <FolderOpen className="h-5 w-5" />
+                      <span>Select Documents</span>
+                      <Badge variant="secondary" className="text-xs">
+                        {selectedDocuments.length} selected
+                      </Badge>
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => window.open(`/dashboard/${search_space_id}/documents/upload`, '_blank')}
+                      className="h-8"
+                    >
+                      <Upload className="h-3 w-3 mr-1.5" />
+                      Upload
+                    </Button>
+                  </DialogTitle>
+                  <DialogDescription>
+                    Choose documents to include in your research context. Use filters and search to find specific documents.
+                  </DialogDescription>
+                </DialogHeader>
+
+                {/* Enhanced Search and Filter Controls */}
+                <div className="flex-shrink-0 space-y-3 py-4">
+                  <div className="flex flex-col sm:flex-row gap-3">
+                    {/* Search Input */}
+                    <div className="relative flex-1">
+                      <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                      <Input
+                        placeholder="Search documents by title or content..."
+                        className="pl-10 pr-4"
+                        value={documentFilter}
+                        onChange={(e) => setDocumentFilter(e.target.value)}
+                      />
+                      {documentFilter && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="absolute right-1 top-1/2 transform -translate-y-1/2 h-6 w-6"
+                          onClick={() => setDocumentFilter("")}
+                        >
+                          <X className="h-3 w-3" />
+                        </Button>
+                      )}
+                    </div>
+
+                                         {/* Document Type Filter */}
+                     <DocumentTypeFilter
+                       value={documentTypeFilter}
+                       onChange={(newType) => {
+                         setDocumentTypeFilter(newType);
+                         setDocumentsPage(1); // Reset to page 1 when filter changes
+                       }}
+                       counts={documentTypeCounts}
+                     />
                   </div>
-                </DialogTrigger>
+
+                  {/* Results Summary */}
+                  <div className="flex items-center justify-between text-sm text-muted-foreground">
+                    <span>
+                      {isLoadingDocuments ? (
+                        "Loading documents..."
+                      ) : (
+                        `Showing ${paginatedDocuments.length} of ${filteredDocuments.length} documents`
+                      )}
+                    </span>
+                    {filteredDocuments.length > 0 && (
+                      <span>
+                        Page {documentsPage} of {totalPages}
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                                 {/* Document List with Proper Scrolling */}
+                 <div className="flex-1 min-h-0">
+                   <div className="h-full max-h-[400px] overflow-y-auto space-y-2 pr-2">
+                     {isLoadingDocuments ? (
+                       // Enhanced skeleton loading
+                       Array.from({ length: 6 }, (_, i) => (
+                         <DocumentSkeleton key={i} />
+                       ))
+                     ) : documentsError ? (
+                       <div className="flex flex-col items-center justify-center py-12 text-center">
+                         <div className="rounded-full bg-destructive/10 p-3 mb-4">
+                           <X className="h-6 w-6 text-destructive" />
+                         </div>
+                         <h3 className="font-medium text-destructive mb-1">Error loading documents</h3>
+                         <p className="text-sm text-muted-foreground">Please try refreshing the page</p>
+                       </div>
+                     ) : filteredDocuments.length === 0 ? (
+                       <div className="flex flex-col items-center justify-center py-12 text-center">
+                         <div className="rounded-full bg-muted p-3 mb-4">
+                           <FolderOpen className="h-6 w-6 text-muted-foreground" />
+                         </div>
+                         <h3 className="font-medium mb-1">No documents found</h3>
+                         <p className="text-sm text-muted-foreground mb-4">
+                           {documentFilter || documentTypeFilter !== "ALL"
+                             ? "Try adjusting your search or filters"
+                             : "Upload documents to get started"}
+                         </p>
+                         {(!documentFilter && documentTypeFilter === "ALL") && (
+                           <Button
+                             variant="outline"
+                             size="sm"
+                             onClick={() => window.open(`/dashboard/${search_space_id}/documents/upload`, '_blank')}
+                           >
+                             <Upload className="h-4 w-4 mr-2" />
+                             Upload Documents
+                           </Button>
+                         )}
+                       </div>
+                     ) : (
+                       // Enhanced document list
+                       paginatedDocuments.map((document) => {
+                         const isSelected = selectedDocuments.includes(document.id);
+                         const typeLabel = document.document_type.replace(/_/g, ' ').toLowerCase();
+
+                         return (
+                           <div
+                             key={document.id}
+                             className={`group flex items-start gap-3 p-4 rounded-lg border cursor-pointer transition-all duration-200 ${
+                               isSelected
+                                 ? 'border-primary bg-primary/5 ring-1 ring-primary/20'
+                                 : 'border-border hover:border-primary/50 hover:bg-muted/50'
+                             }`}
+                             onClick={() => handleDocumentToggle(document.id)}
+                           >
+                             <div className="flex-shrink-0 w-6 h-6 flex items-center justify-center mt-1">
+                               <div className={`${isSelected ? 'text-primary' : 'text-muted-foreground'} transition-colors`}>
+                                 {getConnectorIcon(document.document_type)}
+                               </div>
+                             </div>
+                             <div className="flex-1 min-w-0">
+                               <div className="flex items-start justify-between gap-2 mb-2">
+                                 <h3 className={`font-medium text-sm leading-5 ${isSelected ? 'text-foreground' : 'text-foreground'}`}>
+                                   {document.title}
+                                 </h3>
+                                 {isSelected && (
+                                   <div className="flex-shrink-0">
+                                     <div className="rounded-full bg-primary p-1">
+                                       <Check className="h-3 w-3 text-primary-foreground" />
+                                     </div>
+                                   </div>
+                                 )}
+                               </div>
+                               <div className="flex items-center gap-2 mb-2">
+                                 <Badge variant="outline" className="text-xs">
+                                   {typeLabel}
+                                 </Badge>
+                                 <span className="text-xs text-muted-foreground">
+                                   {new Date(document.created_at).toLocaleDateString()}
+                                 </span>
+                               </div>
+                               <p className="text-xs text-muted-foreground line-clamp-2 leading-relaxed">
+                                 {document.content.substring(0, 200)}...
+                               </p>
+                             </div>
+                           </div>
+                         );
+                       })
+                     )}
+                   </div>
+                 </div>
+
+                {/* Enhanced Pagination Controls */}
+                {totalPages > 1 && (
+                  <div className="flex-shrink-0 flex items-center justify-between pt-4 border-t">
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setDocumentsPage(p => Math.max(1, p - 1))}
+                        disabled={documentsPage === 1}
+                      >
+                        <ChevronLeft className="h-4 w-4" />
+                        Previous
+                      </Button>
+                      <div className="flex items-center gap-1">
+                        {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                          const page = documentsPage <= 3 ? i + 1 : documentsPage - 2 + i;
+                          if (page > totalPages) return null;
+                          return (
+                            <Button
+                              key={page}
+                              variant={page === documentsPage ? "default" : "outline"}
+                              size="sm"
+                              className="w-8 h-8 p-0"
+                              onClick={() => setDocumentsPage(page)}
+                            >
+                              {page}
+                            </Button>
+                          );
+                        })}
+                        {totalPages > 5 && documentsPage < totalPages - 2 && (
+                          <>
+                            <span className="px-2 text-muted-foreground">...</span>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="w-8 h-8 p-0"
+                              onClick={() => setDocumentsPage(totalPages)}
+                            >
+                              {totalPages}
+                            </Button>
+                          </>
+                        )}
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setDocumentsPage(p => Math.min(totalPages, p + 1))}
+                        disabled={documentsPage === totalPages}
+                      >
+                        Next
+                        <ChevronRight className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Enhanced Footer */}
+                <DialogFooter className="flex-shrink-0 flex flex-col sm:flex-row gap-3 pt-4">
+                  <div className="flex items-center text-sm text-muted-foreground">
+                    <span>
+                      {selectedDocuments.length} of {filteredDocuments.length} document{selectedDocuments.length !== 1 ? 's' : ''} selected
+                    </span>
+                  </div>
+                  <div className="flex gap-2 ml-auto">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setSelectedDocuments([])}
+                      disabled={selectedDocuments.length === 0}
+                    >
+                      Clear All
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        const visibleIds = paginatedDocuments.map(doc => doc.id);
+                        const allVisibleSelected = visibleIds.every(id => selectedDocuments.includes(id));
+                        
+                        if (allVisibleSelected) {
+                          setSelectedDocuments(prev => prev.filter(id => !visibleIds.includes(id)));
+                        } else {
+                          setSelectedDocuments(prev => [...new Set([...prev, ...visibleIds])]);
+                        }
+                      }}
+                      disabled={paginatedDocuments.length === 0}
+                    >
+                      {paginatedDocuments.every(doc => selectedDocuments.includes(doc.id)) ? 'Deselect' : 'Select'} Page
+                    </Button>
+                    <Button
+                      size="sm"
+                      onClick={() => {
+                        const allFilteredIds = filteredDocuments.map(doc => doc.id);
+                        const allSelected = allFilteredIds.every(id => selectedDocuments.includes(id));
+                        
+                        if (allSelected) {
+                          setSelectedDocuments(prev => prev.filter(id => !allFilteredIds.includes(id)));
+                        } else {
+                          setSelectedDocuments(prev => [...new Set([...prev, ...allFilteredIds])]);
+                        }
+                      }}
+                      disabled={filteredDocuments.length === 0}
+                    >
+                      {filteredDocuments.every(doc => selectedDocuments.includes(doc.id)) ? 'Deselect' : 'Select'} All Filtered
+                    </Button>
+                  </div>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+
+            {/* Connector Selection Dialog */}
+            <Dialog>
+              <DialogTrigger asChild>
+                <ConnectorButton
+                  selectedConnectors={selectedConnectors}
+                  onClick={() => { }}
+                />
+              </DialogTrigger>
                 <DialogContent className="sm:max-w-md">
                   <DialogHeader>
                     <DialogTitle>Select Connectors</DialogTitle>
@@ -1054,37 +1539,34 @@ const ChatPage = () => {
               </Dialog>
 
               {/* Search Mode Control */}
-              <div className="flex items-center p-0.5 rounded-md border border-border bg-muted/20 h-8">
-                <button
+              <div className="flex gap-1">
+                <Button
+                  variant={searchMode === 'DOCUMENTS' ? 'default' : 'outline'}
+                  size="sm"
                   onClick={() => setSearchMode('DOCUMENTS')}
-                  className={`flex h-full items-center justify-center gap-1 px-2 rounded text-xs font-medium transition-colors flex-1 whitespace-nowrap overflow-hidden ${
-                    searchMode === 'DOCUMENTS'
-                      ? 'bg-primary text-primary-foreground shadow-sm'
-                      : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
-                  }`}
+                  className="h-8 px-3 text-xs"
+                  title="Search full documents"
                 >
-                  <FileText className="h-3 w-3 flex-shrink-0 mr-1" />
-                  <span>Full Document</span>
-                </button>
-                <button
+                  <FileText className="h-3 w-3 mr-1.5" />
+                  <span className="hidden sm:inline">Full</span>
+                </Button>
+                <Button
+                  variant={searchMode === 'CHUNKS' ? 'default' : 'outline'}
+                  size="sm"
                   onClick={() => setSearchMode('CHUNKS')}
-                  className={`flex h-full items-center justify-center gap-1 px-2 rounded text-xs font-medium transition-colors flex-1 whitespace-nowrap overflow-hidden ${
-                    searchMode === 'CHUNKS'
-                      ? 'bg-primary text-primary-foreground shadow-sm'
-                      : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
-                  }`}
+                  className="h-8 px-3 text-xs"
+                  title="Search document chunks"
                 >
-                  <Grid3x3 className="h-3 w-3 flex-shrink-0 mr-1" />
-                  <span>Document Chunks</span>
-                </button>
+                  <Grid3x3 className="h-3 w-3 mr-1.5" />
+                  <span className="hidden sm:inline">Chunks</span>
+                </Button>
               </div>
 
-              {/* Research Mode Segmented Control */}
-              <div className="h-8">
-                <SegmentedControl<ResearchMode>
+              {/* Research Mode Control */}
+              <div className="h-8 min-w-0 overflow-hidden">
+                <ResearchModeControl
                   value={researchMode}
                   onChange={setResearchMode}
-                  options={researcherOptions}
                 />
               </div>
             </div>
