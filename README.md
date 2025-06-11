@@ -2,19 +2,28 @@
 ![new_header](https://github.com/user-attachments/assets/e236b764-0ddc-42ff-a1f1-8fbb3d2e0e65)
 
 
+<div align="center">
+<a href="https://discord.gg/ejRNvftDp9">
+<img src="https://img.shields.io/discord/1359368468260192417" alt="Discord">
+</a>
+</div>
 
 
 # SurfSense
-While tools like NotebookLM and Perplexity are impressive and highly effective for conducting research on any topic/query, SurfSense elevates this capability by integrating with your personal knowledge base. It is a highly customizable AI research agent, connected to external sources such as search engines (Tavily, LinkUp), Slack, Linear, Notion, YouTube, GitHub and more to come.
+While tools like NotebookLM and Perplexity are impressive and highly effective for conducting research on any topic/query, SurfSense elevates this capability by integrating with your personal knowledge base. It is a highly customizable AI research agent, connected to external sources such as search engines (Tavily, LinkUp), Slack, Linear, Notion, YouTube, GitHub, Discord and more to come.
 
 <div align="center">
 <a href="https://trendshift.io/repositories/13606" target="_blank"><img src="https://trendshift.io/api/badge/repositories/13606" alt="MODSetter%2FSurfSense | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
 </div>
 
 
-# Video
+# Video 
 
-https://github.com/user-attachments/assets/48142909-6391-4084-b7e8-81da388bb1fc
+
+https://github.com/user-attachments/assets/d9221908-e0de-4b2f-ac3a-691cf4b202da
+
+
+
 
 # Podcast's
 
@@ -22,7 +31,8 @@ https://github.com/user-attachments/assets/d516982f-de00-4c41-9e4c-632a7d942f41
 
 ## Podcast Sample
 
-https://github.com/user-attachments/assets/bf64a6ca-934b-47ac-9e1b-edac5fe972ec
+https://github.com/user-attachments/assets/a0a16566-6967-4374-ac51-9b3e07fbecd7
+
 
 
 
@@ -48,7 +58,7 @@ Open source and easy to deploy locally.
 - Support for multiple TTS providers (OpenAI, Azure, Google Vertex AI)
 
 ### 📊 **Advanced RAG Techniques**
-- Supports 150+ LLM's
+- Supports 100+ LLM's
 - Supports 6000+ Embedding Models.
 - Supports all major Rerankers (Pinecode, Cohere, Flashrank etc)
 - Uses Hierarchical Indices (2 tiered RAG setup).
@@ -62,6 +72,7 @@ Open source and easy to deploy locally.
 - Notion
 - Youtube Videos
 - GitHub
+- Discord
 - and more to come.....
 
 ## 📄 **Supported File Extensions**
@@ -106,7 +117,12 @@ Open source and easy to deploy locally.
 
 Join the [SurfSense Discord](https://discord.gg/ejRNvftDp9) and help shape the future of SurfSense!
 
+## 🚀 Roadmap
 
+Stay up to date with our development progress and upcoming features!  
+Check out our public roadmap and contribute your ideas or feedback:
+
+**View the Roadmap:** [SurfSense Roadmap on GitHub Projects](https://github.com/users/MODSetter/projects/2)
 
 ## How to get started?
 
@@ -128,10 +144,16 @@ Both installation guides include detailed OS-specific instructions for Windows, 
 
 Before installation, make sure to complete the [prerequisite setup steps](https://www.surfsense.net/docs/) including:
 - PGVector setup
-- Unstructured.io API key
+- **File Processing ETL Service** (choose one):
+  - Unstructured.io API key (supports 34+ formats)
+  - LlamaIndex API key (enhanced parsing, supports 50+ formats)
 - Other required API keys
 
 ## Screenshots
+
+**Research Agent** 
+
+![updated_researcher](https://github.com/user-attachments/assets/e22c5d86-f511-4c72-8c50-feba0c1561b4)
 
 **Search Spaces** 
 
@@ -140,17 +162,13 @@ Before installation, make sure to complete the [prerequisite setup steps](https:
 **Manage Documents** 
 ![documents](https://github.com/user-attachments/assets/7001e306-eb06-4009-89c6-8fadfdc3fc4d)
 
-**Research Agent** 
-
-![researcher](https://github.com/user-attachments/assets/fda3e61f-f936-4b66-b565-d84edde44a67)
-
 **Podcast Agent** 
 ![podcasts](https://github.com/user-attachments/assets/6cb82ffd-9e14-4172-bc79-67faf34c4c1c)
 
 
 **Agent Chat** 
 
-![chat](https://github.com/user-attachments/assets/bb352d52-1c6d-4020-926b-722d0b98b491)
+![git_chat](https://github.com/user-attachments/assets/bb352d52-1c6d-4020-926b-722d0b98b491)
 
 **Browser Extension**
 

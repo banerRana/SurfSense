@@ -45,7 +45,7 @@ import {
 } from "@/components/ui/table";
 import { useDocuments } from "@/hooks/use-documents";
 import { cn } from "@/lib/utils";
-import { IconBrandGithub, IconBrandNotion, IconBrandSlack, IconBrandYoutube, IconLayoutKanban } from "@tabler/icons-react";
+import { IconBrandDiscord, IconBrandGithub, IconBrandNotion, IconBrandSlack, IconBrandYoutube, IconLayoutKanban } from "@tabler/icons-react";
 import {
     ColumnDef,
     ColumnFiltersState,
@@ -109,7 +109,7 @@ const fadeInScale = {
 type Document = {
     id: number;
     title: string;
-    document_type: "EXTENSION" | "CRAWLED_URL" | "SLACK_CONNECTOR" | "NOTION_CONNECTOR" | "FILE" | "YOUTUBE_VIDEO" | "LINEAR_CONNECTOR";
+    document_type: "EXTENSION" | "CRAWLED_URL" | "SLACK_CONNECTOR" | "NOTION_CONNECTOR" | "FILE" | "YOUTUBE_VIDEO" | "LINEAR_CONNECTOR" | "DISCORD_CONNECTOR";
     document_metadata: any;
     content: string;
     created_at: string;
@@ -139,6 +139,7 @@ const documentTypeIcons = {
     YOUTUBE_VIDEO: IconBrandYoutube,
     GITHUB_CONNECTOR: IconBrandGithub,
     LINEAR_CONNECTOR: IconLayoutKanban,
+    DISCORD_CONNECTOR: IconBrandDiscord,
 } as const;
 
 const columns: ColumnDef<Document>[] = [
@@ -282,8 +283,8 @@ export default function DocumentsTable() {
     const searchSpaceId = Number(params.search_space_id);
     const { documents, loading, error, refreshDocuments, deleteDocument } = useDocuments(searchSpaceId);
     
-    console.log("Search Space ID:", searchSpaceId);
-    console.log("Documents loaded:", documents?.length);
+    // console.log("Search Space ID:", searchSpaceId);
+    // console.log("Documents loaded:", documents?.length);
     
     useEffect(() => {
         console.log("Delete document function available:", !!deleteDocument);
@@ -314,7 +315,7 @@ export default function DocumentsTable() {
 
     const handleDeleteRows = async () => {
         const selectedRows = table.getSelectedRowModel().rows;
-        console.log("Deleting selected rows:", selectedRows.length);
+        // console.log("Deleting selected rows:", selectedRows.length);
         
         if (selectedRows.length === 0) {
             toast.error("No rows selected");
@@ -323,14 +324,14 @@ export default function DocumentsTable() {
         
         // Create an array of promises for each delete operation
         const deletePromises = selectedRows.map(row => {
-            console.log("Deleting row with ID:", row.original.id);
+            // console.log("Deleting row with ID:", row.original.id);
             return deleteDocument(row.original.id);
         });
         
         try {
             // Execute all delete operations
             const results = await Promise.all(deletePromises);
-            console.log("Delete results:", results);
+            // console.log("Delete results:", results);
             
             // Check if all deletions were successful
             const allSuccessful = results.every(result => result === true);

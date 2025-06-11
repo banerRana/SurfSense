@@ -7,7 +7,7 @@ PUT /search-source-connectors/{connector_id} - Update a specific connector
 DELETE /search-source-connectors/{connector_id} - Delete a specific connector
 POST /search-source-connectors/{connector_id}/index - Index content from a connector to a search space
 
-Note: Each user can have only one connector of each type (SERPER_API, TAVILY_API, SLACK_CONNECTOR, NOTION_CONNECTOR, GITHUB_CONNECTOR, LINEAR_CONNECTOR).
+Note: Each user can have only one connector of each type (SERPER_API, TAVILY_API, SLACK_CONNECTOR, NOTION_CONNECTOR, GITHUB_CONNECTOR, LINEAR_CONNECTOR, DISCORD_CONNECTOR).
 """
 from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks, Body
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,7 +19,7 @@ from app.schemas import SearchSourceConnectorCreate, SearchSourceConnectorUpdate
 from app.users import current_active_user
 from app.utils.check_ownership import check_ownership
 from pydantic import BaseModel, Field, ValidationError
-from app.tasks.connectors_indexing_tasks import index_slack_messages, index_notion_pages, index_github_repos, index_linear_issues
+from app.tasks.connectors_indexing_tasks import index_slack_messages, index_notion_pages, index_github_repos, index_linear_issues, index_discord_messages
 from app.connectors.github_connector import GitHubConnector
 from datetime import datetime, timedelta
 import logging
@@ -270,6 +270,8 @@ async def delete_search_source_connector(
 async def index_connector_content(
     connector_id: int,
     search_space_id: int = Query(..., description="ID of the search space to store indexed content"),
+    start_date: str = Query(None, description="Start date for indexing (YYYY-MM-DD format). If not provided, uses last_indexed_at or defaults to 365 days ago"),
+    end_date: str = Query(None, description="End date for indexing (YYYY-MM-DD format). If not provided, uses today's date"),
     session: AsyncSession = Depends(get_async_session),
     user: User = Depends(current_active_user),
     background_tasks: BackgroundTasks = None
@@ -282,6 +284,7 @@ async def index_connector_content(
     - NOTION_CONNECTOR: Indexes pages from all accessible Notion pages
     - GITHUB_CONNECTOR: Indexes code and documentation from GitHub repositories
     - LINEAR_CONNECTOR: Indexes issues and comments from Linear
+    - DISCORD_CONNECTOR: Indexes messages from all accessible Discord channels
     
     Args:
         connector_id: ID of the connector to use
@@ -300,83 +303,61 @@ async def index_connector_content(
         
         # Handle different connector types
         response_message = ""
-        indexing_from = None
-        indexing_to = None
         today_str = datetime.now().strftime("%Y-%m-%d")
-
-        if connector.connector_type == SearchSourceConnectorType.SLACK_CONNECTOR:
-            # Determine the time range that will be indexed
-            if not connector.last_indexed_at:
-                start_date = "365 days ago" # Or perhaps set a specific date if needed
-            else:
-                # Check if last_indexed_at is today
+        
+        # Determine the actual date range to use
+        if start_date is None:
+            # Use last_indexed_at or default to 365 days ago
+            if connector.last_indexed_at:
                 today = datetime.now().date()
                 if connector.last_indexed_at.date() == today:
                     # If last indexed today, go back 1 day to ensure we don't miss anything
-                    start_date = (today - timedelta(days=1)).strftime("%Y-%m-%d")
+                    indexing_from = (today - timedelta(days=1)).strftime("%Y-%m-%d")
                 else:
-                    start_date = connector.last_indexed_at.strftime("%Y-%m-%d")
-            
+                    indexing_from = connector.last_indexed_at.strftime("%Y-%m-%d")
+            else:
+                indexing_from = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
+        else:
             indexing_from = start_date
-            indexing_to = today_str
             
+        if end_date is None:
+            indexing_to = today_str
+        else:
+            indexing_to = end_date
+
+        if connector.connector_type == SearchSourceConnectorType.SLACK_CONNECTOR:
             # Run indexing in background
-            logger.info(f"Triggering Slack indexing for connector {connector_id} into search space {search_space_id}")
-            background_tasks.add_task(run_slack_indexing_with_new_session, connector_id, search_space_id)
+            logger.info(f"Triggering Slack indexing for connector {connector_id} into search space {search_space_id} from {indexing_from} to {indexing_to}")
+            background_tasks.add_task(run_slack_indexing_with_new_session, connector_id, search_space_id, str(user.id), indexing_from, indexing_to)
             response_message = "Slack indexing started in the background."
 
         elif connector.connector_type == SearchSourceConnectorType.NOTION_CONNECTOR:
-            # Determine the time range that will be indexed
-            if not connector.last_indexed_at:
-                start_date = "365 days ago" # Or perhaps set a specific date
-            else:
-                # Check if last_indexed_at is today
-                today = datetime.now().date()
-                if connector.last_indexed_at.date() == today:
-                    # If last indexed today, go back 1 day to ensure we don't miss anything
-                    start_date = (today - timedelta(days=1)).strftime("%Y-%m-%d")
-                else:
-                    start_date = connector.last_indexed_at.strftime("%Y-%m-%d")
-            
-            indexing_from = start_date
-            indexing_to = today_str
-
             # Run indexing in background
-            logger.info(f"Triggering Notion indexing for connector {connector_id} into search space {search_space_id}")
-            background_tasks.add_task(run_notion_indexing_with_new_session, connector_id, search_space_id)
+            logger.info(f"Triggering Notion indexing for connector {connector_id} into search space {search_space_id} from {indexing_from} to {indexing_to}")
+            background_tasks.add_task(run_notion_indexing_with_new_session, connector_id, search_space_id, str(user.id), indexing_from, indexing_to)
             response_message = "Notion indexing started in the background."
             
         elif connector.connector_type == SearchSourceConnectorType.GITHUB_CONNECTOR:
-            # GitHub connector likely indexes everything relevant, or uses internal logic
-            # Setting indexing_from to None and indexing_to to today
-            indexing_from = None 
-            indexing_to = today_str
-
             # Run indexing in background
-            logger.info(f"Triggering GitHub indexing for connector {connector_id} into search space {search_space_id}")
-            background_tasks.add_task(run_github_indexing_with_new_session, connector_id, search_space_id)
+            logger.info(f"Triggering GitHub indexing for connector {connector_id} into search space {search_space_id} from {indexing_from} to {indexing_to}")
+            background_tasks.add_task(run_github_indexing_with_new_session, connector_id, search_space_id, str(user.id), indexing_from, indexing_to)
             response_message = "GitHub indexing started in the background."
             
         elif connector.connector_type == SearchSourceConnectorType.LINEAR_CONNECTOR:
-            # Determine the time range that will be indexed
-            if not connector.last_indexed_at:
-                start_date = "365 days ago"
-            else:
-                # Check if last_indexed_at is today
-                today = datetime.now().date()
-                if connector.last_indexed_at.date() == today:
-                    # If last indexed today, go back 1 day to ensure we don't miss anything
-                    start_date = (today - timedelta(days=1)).strftime("%Y-%m-%d")
-                else:
-                    start_date = connector.last_indexed_at.strftime("%Y-%m-%d")
-            
-            indexing_from = start_date
-            indexing_to = today_str
-
             # Run indexing in background
-            logger.info(f"Triggering Linear indexing for connector {connector_id} into search space {search_space_id}")
-            background_tasks.add_task(run_linear_indexing_with_new_session, connector_id, search_space_id)
+            logger.info(f"Triggering Linear indexing for connector {connector_id} into search space {search_space_id} from {indexing_from} to {indexing_to}")
+            background_tasks.add_task(run_linear_indexing_with_new_session, connector_id, search_space_id, str(user.id), indexing_from, indexing_to)
             response_message = "Linear indexing started in the background."
+
+        elif connector.connector_type == SearchSourceConnectorType.DISCORD_CONNECTOR:
+            # Run indexing in background
+            logger.info(
+                f"Triggering Discord indexing for connector {connector_id} into search space {search_space_id} from {indexing_from} to {indexing_to}"
+            )
+            background_tasks.add_task(
+                run_discord_indexing_with_new_session, connector_id, search_space_id, str(user.id), indexing_from, indexing_to
+            )
+            response_message = "Discord indexing started in the background."
 
         else:
             raise HTTPException(
@@ -428,19 +409,25 @@ async def update_connector_last_indexed(
 
 async def run_slack_indexing_with_new_session(
     connector_id: int,
-    search_space_id: int
+    search_space_id: int,
+    user_id: str,
+    start_date: str,
+    end_date: str
 ):
     """
     Create a new session and run the Slack indexing task.
     This prevents session leaks by creating a dedicated session for the background task.
     """
     async with async_session_maker() as session:
-        await run_slack_indexing(session, connector_id, search_space_id)
+        await run_slack_indexing(session, connector_id, search_space_id, user_id, start_date, end_date)
 
 async def run_slack_indexing(
     session: AsyncSession,
     connector_id: int,
-    search_space_id: int
+    search_space_id: int,
+    user_id: str,
+    start_date: str,
+    end_date: str
 ):
     """
     Background task to run Slack indexing.
@@ -449,6 +436,9 @@ async def run_slack_indexing(
         session: Database session
         connector_id: ID of the Slack connector
         search_space_id: ID of the search space
+        user_id: ID of the user
+        start_date: Start date for indexing
+        end_date: End date for indexing
     """
     try:
         # Index Slack messages without updating last_indexed_at (we'll do it separately)
@@ -456,6 +446,9 @@ async def run_slack_indexing(
             session=session,
             connector_id=connector_id,
             search_space_id=search_space_id,
+            user_id=user_id,
+            start_date=start_date,
+            end_date=end_date,
             update_last_indexed=False  # Don't update timestamp in the indexing function
         )
         
@@ -470,19 +463,25 @@ async def run_slack_indexing(
 
 async def run_notion_indexing_with_new_session(
     connector_id: int,
-    search_space_id: int
+    search_space_id: int,
+    user_id: str,
+    start_date: str,
+    end_date: str
 ):
     """
     Create a new session and run the Notion indexing task.
     This prevents session leaks by creating a dedicated session for the background task.
     """
     async with async_session_maker() as session:
-        await run_notion_indexing(session, connector_id, search_space_id)
+        await run_notion_indexing(session, connector_id, search_space_id, user_id, start_date, end_date)
 
 async def run_notion_indexing(
     session: AsyncSession,
     connector_id: int,
-    search_space_id: int
+    search_space_id: int,
+    user_id: str,
+    start_date: str,
+    end_date: str
 ):
     """
     Background task to run Notion indexing.
@@ -491,6 +490,9 @@ async def run_notion_indexing(
         session: Database session
         connector_id: ID of the Notion connector
         search_space_id: ID of the search space
+        user_id: ID of the user
+        start_date: Start date for indexing
+        end_date: End date for indexing
     """
     try:
         # Index Notion pages without updating last_indexed_at (we'll do it separately)
@@ -498,6 +500,9 @@ async def run_notion_indexing(
             session=session,
             connector_id=connector_id,
             search_space_id=search_space_id,
+            user_id=user_id,
+            start_date=start_date,
+            end_date=end_date,
             update_last_indexed=False  # Don't update timestamp in the indexing function
         )
         
@@ -513,23 +518,29 @@ async def run_notion_indexing(
 # Add new helper functions for GitHub indexing
 async def run_github_indexing_with_new_session(
     connector_id: int,
-    search_space_id: int
+    search_space_id: int,
+    user_id: str,
+    start_date: str,
+    end_date: str
 ):
     """Wrapper to run GitHub indexing with its own database session."""
-    logger.info(f"Background task started: Indexing GitHub connector {connector_id} into space {search_space_id}")
+    logger.info(f"Background task started: Indexing GitHub connector {connector_id} into space {search_space_id} from {start_date} to {end_date}")
     async with async_session_maker() as session:
-        await run_github_indexing(session, connector_id, search_space_id)
+        await run_github_indexing(session, connector_id, search_space_id, user_id, start_date, end_date)
     logger.info(f"Background task finished: Indexing GitHub connector {connector_id}")
 
 async def run_github_indexing(
     session: AsyncSession,
     connector_id: int,
-    search_space_id: int
+    search_space_id: int,
+    user_id: str,
+    start_date: str,
+    end_date: str
 ):
     """Runs the GitHub indexing task and updates the timestamp."""
     try:
         indexed_count, error_message = await index_github_repos(
-            session, connector_id, search_space_id, update_last_indexed=False
+            session, connector_id, search_space_id, user_id, start_date, end_date, update_last_indexed=False
         )
         if error_message:
             logger.error(f"GitHub indexing failed for connector {connector_id}: {error_message}")
@@ -547,23 +558,29 @@ async def run_github_indexing(
 # Add new helper functions for Linear indexing
 async def run_linear_indexing_with_new_session(
     connector_id: int,
-    search_space_id: int
+    search_space_id: int,
+    user_id: str,
+    start_date: str,
+    end_date: str
 ):
     """Wrapper to run Linear indexing with its own database session."""
-    logger.info(f"Background task started: Indexing Linear connector {connector_id} into space {search_space_id}")
+    logger.info(f"Background task started: Indexing Linear connector {connector_id} into space {search_space_id} from {start_date} to {end_date}")
     async with async_session_maker() as session:
-        await run_linear_indexing(session, connector_id, search_space_id)
+        await run_linear_indexing(session, connector_id, search_space_id, user_id, start_date, end_date)
     logger.info(f"Background task finished: Indexing Linear connector {connector_id}")
 
 async def run_linear_indexing(
     session: AsyncSession,
     connector_id: int,
-    search_space_id: int
+    search_space_id: int,
+    user_id: str,
+    start_date: str,
+    end_date: str
 ):
     """Runs the Linear indexing task and updates the timestamp."""
     try:
         indexed_count, error_message = await index_linear_issues(
-            session, connector_id, search_space_id, update_last_indexed=False
+            session, connector_id, search_space_id, user_id, start_date, end_date, update_last_indexed=False
         )
         if error_message:
             logger.error(f"Linear indexing failed for connector {connector_id}: {error_message}")
@@ -577,3 +594,57 @@ async def run_linear_indexing(
         await session.rollback()
         logger.error(f"Critical error in run_linear_indexing for connector {connector_id}: {e}", exc_info=True)
         # Optionally update status in DB to indicate failure
+
+# Add new helper functions for discord indexing
+async def run_discord_indexing_with_new_session(
+    connector_id: int,
+    search_space_id: int,
+    user_id: str,
+    start_date: str,
+    end_date: str
+):
+    """
+    Create a new session and run the Discord indexing task.
+    This prevents session leaks by creating a dedicated session for the background task.
+    """
+    async with async_session_maker() as session:
+        await run_discord_indexing(session, connector_id, search_space_id, user_id, start_date, end_date)
+
+async def run_discord_indexing(
+    session: AsyncSession,
+    connector_id: int,
+    search_space_id: int,
+    user_id: str,
+    start_date: str,
+    end_date: str
+):
+    """
+    Background task to run Discord indexing.
+    Args:
+        session: Database session
+        connector_id: ID of the Discord connector
+        search_space_id: ID of the search space
+        user_id: ID of the user
+        start_date: Start date for indexing
+        end_date: End date for indexing
+    """
+    try:
+        # Index Discord messages without updating last_indexed_at (we'll do it separately)
+        documents_processed, error_or_warning = await index_discord_messages(
+            session=session,
+            connector_id=connector_id,
+            search_space_id=search_space_id,
+            user_id=user_id,
+            start_date=start_date,
+            end_date=end_date,
+            update_last_indexed=False  # Don't update timestamp in the indexing function
+        )
+
+        # Only update last_indexed_at if indexing was successful (either new docs or updated docs)
+        if documents_processed > 0:
+            await update_connector_last_indexed(session, connector_id)
+            logger.info(f"Discord indexing completed successfully: {documents_processed} documents processed")
+        else:
+            logger.error(f"Discord indexing failed or no documents processed: {error_or_warning}")
+    except Exception as e:
+        logger.error(f"Error in background Discord indexing task: {str(e)}")

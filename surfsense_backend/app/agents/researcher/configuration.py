@@ -13,6 +13,13 @@ class SearchMode(Enum):
     CHUNKS = "CHUNKS"
     DOCUMENTS = "DOCUMENTS"
 
+class ResearchMode(Enum):
+    """Enum defining the type of research mode."""
+    QNA = "QNA"
+    REPORT_GENERAL = "REPORT_GENERAL"
+    REPORT_DEEP = "REPORT_DEEP"
+    REPORT_DEEPER = "REPORT_DEEPER"
+
 
 @dataclass(kw_only=True)
 class Configuration:
@@ -25,7 +32,8 @@ class Configuration:
     user_id: str
     search_space_id: int
     search_mode: SearchMode
-
+    research_mode: ResearchMode
+    document_ids_to_add_in_context: List[int]
 
     @classmethod
     def from_runnable_config(

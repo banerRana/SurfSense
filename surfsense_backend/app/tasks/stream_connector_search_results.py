@@ -17,7 +17,8 @@ async def stream_connector_search_results(
     research_mode: str, 
     selected_connectors: List[str],
     langchain_chat_history: List[Any],
-    search_mode_str: str
+    search_mode_str: str,
+    document_ids_to_add_in_context: List[int]
 ) -> AsyncGenerator[str, None]:
     """
     Stream connector search results to the client
@@ -34,12 +35,16 @@ async def stream_connector_search_results(
         str: Formatted response strings
     """
     streaming_service = StreamingService()
-    if research_mode == "GENERAL":
+    
+    if research_mode == "REPORT_GENERAL":
         NUM_SECTIONS = 1
-    elif research_mode == "DEEP":
+    elif research_mode == "REPORT_DEEP":
         NUM_SECTIONS = 3
-    elif research_mode == "DEEPER":
+    elif research_mode == "REPORT_DEEPER":
         NUM_SECTIONS = 6
+    else:
+        # Default fallback
+        NUM_SECTIONS = 1
     
     # Convert UUID to string if needed
     user_id_str = str(user_id) if isinstance(user_id, UUID) else user_id
@@ -57,7 +62,9 @@ async def stream_connector_search_results(
             "connectors_to_search": selected_connectors,
             "user_id": user_id_str,
             "search_space_id": search_space_id,
-            "search_mode": search_mode
+            "search_mode": search_mode,
+            "research_mode": research_mode,
+            "document_ids_to_add_in_context": document_ids_to_add_in_context
         }
     }
     # Initialize state with database session and streaming service

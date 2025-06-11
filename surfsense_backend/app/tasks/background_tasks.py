@@ -6,8 +6,8 @@ from app.db import Document, DocumentType, Chunk
 from app.schemas import ExtensionDocumentContent
 from app.config import config
 from app.prompts import SUMMARY_PROMPT_TEMPLATE
-from datetime import datetime
 from app.utils.document_converters import convert_document_to_markdown, generate_content_hash
+from app.utils.llm_service import get_user_long_context_llm
 from langchain_core.documents import Document as LangChainDocument
 from langchain_community.document_loaders import FireCrawlLoader, AsyncChromiumLoader
 from langchain_community.document_transformers import MarkdownifyTransformer
@@ -19,9 +19,8 @@ import logging
 
 md = MarkdownifyTransformer()
 
-
 async def add_crawled_url_document(
-    session: AsyncSession, url: str, search_space_id: int
+    session: AsyncSession, url: str, search_space_id: int, user_id: str
 ) -> Optional[Document]:
     try:
         if not validators.url(url):
@@ -73,7 +72,7 @@ async def add_crawled_url_document(
 
         document_parts.append("</DOCUMENT>")
         combined_document_string = "\n".join(document_parts)
-        content_hash = generate_content_hash(combined_document_string)
+        content_hash = generate_content_hash(combined_document_string, search_space_id)
 
         # Check if document with this content hash already exists
         existing_doc_result = await session.execute(
@@ -85,8 +84,13 @@ async def add_crawled_url_document(
             logging.info(f"Document with content hash {content_hash} already exists. Skipping processing.")
             return existing_document
 
+        # Get user's long context LLM
+        user_llm = await get_user_long_context_llm(session, user_id)
+        if not user_llm:
+            raise RuntimeError(f"No long context LLM configured for user {user_id}")
+
         # Generate summary
-        summary_chain = SUMMARY_PROMPT_TEMPLATE | config.long_context_llm_instance
+        summary_chain = SUMMARY_PROMPT_TEMPLATE | user_llm
         summary_result = await summary_chain.ainvoke(
             {"document": combined_document_string}
         )
@@ -131,7 +135,7 @@ async def add_crawled_url_document(
 
 
 async def add_extension_received_document(
-    session: AsyncSession, content: ExtensionDocumentContent, search_space_id: int
+    session: AsyncSession, content: ExtensionDocumentContent, search_space_id: int, user_id: str
 ) -> Optional[Document]:
     """
     Process and store document content received from the SurfSense Extension.
@@ -175,7 +179,7 @@ async def add_extension_received_document(
 
         document_parts.append("</DOCUMENT>")
         combined_document_string = "\n".join(document_parts)
-        content_hash = generate_content_hash(combined_document_string)
+        content_hash = generate_content_hash(combined_document_string, search_space_id)
 
         # Check if document with this content hash already exists
         existing_doc_result = await session.execute(
@@ -187,8 +191,13 @@ async def add_extension_received_document(
             logging.info(f"Document with content hash {content_hash} already exists. Skipping processing.")
             return existing_document
 
+        # Get user's long context LLM
+        user_llm = await get_user_long_context_llm(session, user_id)
+        if not user_llm:
+            raise RuntimeError(f"No long context LLM configured for user {user_id}")
+
         # Generate summary
-        summary_chain = SUMMARY_PROMPT_TEMPLATE | config.long_context_llm_instance
+        summary_chain = SUMMARY_PROMPT_TEMPLATE | user_llm
         summary_result = await summary_chain.ainvoke(
             {"document": combined_document_string}
         )
@@ -231,10 +240,10 @@ async def add_extension_received_document(
 
 
 async def add_received_markdown_file_document(
-    session: AsyncSession, file_name: str, file_in_markdown: str, search_space_id: int
+    session: AsyncSession, file_name: str, file_in_markdown: str, search_space_id: int, user_id: str
 ) -> Optional[Document]:
     try:
-        content_hash = generate_content_hash(file_in_markdown)
+        content_hash = generate_content_hash(file_in_markdown, search_space_id)
 
         # Check if document with this content hash already exists
         existing_doc_result = await session.execute(
@@ -246,8 +255,13 @@ async def add_received_markdown_file_document(
             logging.info(f"Document with content hash {content_hash} already exists. Skipping processing.")
             return existing_document
 
+        # Get user's long context LLM
+        user_llm = await get_user_long_context_llm(session, user_id)
+        if not user_llm:
+            raise RuntimeError(f"No long context LLM configured for user {user_id}")
+
         # Generate summary
-        summary_chain = SUMMARY_PROMPT_TEMPLATE | config.long_context_llm_instance
+        summary_chain = SUMMARY_PROMPT_TEMPLATE | user_llm
         summary_result = await summary_chain.ainvoke({"document": file_in_markdown})
         summary_content = summary_result.content
         summary_embedding = config.embedding_model_instance.embed(summary_content)
@@ -293,13 +307,14 @@ async def add_received_file_document_using_unstructured(
     file_name: str,
     unstructured_processed_elements: List[LangChainDocument],
     search_space_id: int,
+    user_id: str,
 ) -> Optional[Document]:
     try:
         file_in_markdown = await convert_document_to_markdown(
             unstructured_processed_elements
         )
 
-        content_hash = generate_content_hash(file_in_markdown)
+        content_hash = generate_content_hash(file_in_markdown, search_space_id)
 
         # Check if document with this content hash already exists
         existing_doc_result = await session.execute(
@@ -313,8 +328,13 @@ async def add_received_file_document_using_unstructured(
 
         # TODO: Check if file_markdown exceeds token limit of embedding model
 
+        # Get user's long context LLM
+        user_llm = await get_user_long_context_llm(session, user_id)
+        if not user_llm:
+            raise RuntimeError(f"No long context LLM configured for user {user_id}")
+
         # Generate summary
-        summary_chain = SUMMARY_PROMPT_TEMPLATE | config.long_context_llm_instance
+        summary_chain = SUMMARY_PROMPT_TEMPLATE | user_llm
         summary_result = await summary_chain.ainvoke({"document": file_in_markdown})
         summary_content = summary_result.content
         summary_embedding = config.embedding_model_instance.embed(summary_content)
@@ -361,6 +381,7 @@ async def add_received_file_document_using_llamacloud(
     file_name: str,
     llamacloud_markdown_document: str,
     search_space_id: int,
+    user_id: str,
 ) -> Optional[Document]:
     """
     Process and store document content parsed by LlamaCloud.
@@ -378,7 +399,7 @@ async def add_received_file_document_using_llamacloud(
         # Combine all markdown documents into one
         file_in_markdown = llamacloud_markdown_document
 
-        content_hash = generate_content_hash(file_in_markdown)
+        content_hash = generate_content_hash(file_in_markdown, search_space_id)
 
         # Check if document with this content hash already exists
         existing_doc_result = await session.execute(
@@ -390,8 +411,13 @@ async def add_received_file_document_using_llamacloud(
             logging.info(f"Document with content hash {content_hash} already exists. Skipping processing.")
             return existing_document
 
+        # Get user's long context LLM
+        user_llm = await get_user_long_context_llm(session, user_id)
+        if not user_llm:
+            raise RuntimeError(f"No long context LLM configured for user {user_id}")
+
         # Generate summary
-        summary_chain = SUMMARY_PROMPT_TEMPLATE | config.long_context_llm_instance
+        summary_chain = SUMMARY_PROMPT_TEMPLATE | user_llm
         summary_result = await summary_chain.ainvoke({"document": file_in_markdown})
         summary_content = summary_result.content
         summary_embedding = config.embedding_model_instance.embed(summary_content)
@@ -434,7 +460,7 @@ async def add_received_file_document_using_llamacloud(
 
 
 async def add_youtube_video_document(
-    session: AsyncSession, url: str, search_space_id: int
+    session: AsyncSession, url: str, search_space_id: int, user_id: str
 ):
     """
     Process a YouTube video URL, extract transcripts, and store as a document.
@@ -530,7 +556,7 @@ async def add_youtube_video_document(
 
         document_parts.append("</DOCUMENT>")
         combined_document_string = "\n".join(document_parts)
-        content_hash = generate_content_hash(combined_document_string)
+        content_hash = generate_content_hash(combined_document_string, search_space_id)
 
         # Check if document with this content hash already exists
         existing_doc_result = await session.execute(
@@ -542,8 +568,13 @@ async def add_youtube_video_document(
             logging.info(f"Document with content hash {content_hash} already exists. Skipping processing.")
             return existing_document
 
+        # Get user's long context LLM
+        user_llm = await get_user_long_context_llm(session, user_id)
+        if not user_llm:
+            raise RuntimeError(f"No long context LLM configured for user {user_id}")
+
         # Generate summary
-        summary_chain = SUMMARY_PROMPT_TEMPLATE | config.long_context_llm_instance
+        summary_chain = SUMMARY_PROMPT_TEMPLATE | user_llm
         summary_result = await summary_chain.ainvoke(
             {"document": combined_document_string}
         )

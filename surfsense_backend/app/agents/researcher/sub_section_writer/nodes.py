@@ -3,9 +3,14 @@ from langchain_core.runnables import RunnableConfig
 from .state import State
 from typing import Any, Dict
 from app.config import config as app_config
-from .prompts import get_citation_system_prompt
+from .prompts import get_citation_system_prompt, get_no_documents_system_prompt
 from langchain_core.messages import HumanMessage, SystemMessage
 from .configuration import SubSectionType
+from ..utils import (
+    optimize_documents_for_token_limit, 
+    calculate_token_count,
+    format_documents_section
+)
 
 async def rerank_documents(state: State, config: RunnableConfig) -> Dict[str, Any]:
     """
@@ -80,72 +85,104 @@ async def write_sub_section(state: State, config: RunnableConfig) -> Dict[str, A
     This node takes the relevant documents provided in the configuration and uses
     an LLM to generate a comprehensive answer to the sub-section title with
     proper citations. The citations follow IEEE format using source IDs from the
-    documents.
+    documents. If no documents are provided, it will use chat history to generate
+    content.
     
     Returns:
         Dict containing the final answer in the "final_answer" key.
     """
+    from app.utils.llm_service import get_user_fast_llm
     
     # Get configuration and relevant documents from configuration
     configuration = Configuration.from_runnable_config(config)
-    documents = configuration.relevant_documents
+    documents = state.reranked_documents
+    user_id = configuration.user_id
     
-    # Initialize LLM
-    llm = app_config.fast_llm_instance
+    # Get user's fast LLM
+    llm = await get_user_fast_llm(state.db_session, user_id)
+    if not llm:
+        error_message = f"No fast LLM configured for user {user_id}"
+        print(error_message)
+        raise RuntimeError(error_message)
     
-    # If no documents were provided, return a message indicating this
-    if not documents or len(documents) == 0:
-        return {
-            "final_answer": "No relevant documents were provided to answer this question. Please provide documents or try a different approach."
-        }
-    
-    # Prepare documents for citation formatting
-    formatted_documents = []
-    for i, doc in enumerate(documents):
-        # Extract content and metadata
-        content = doc.get("content", "")
-        doc_info = doc.get("document", {})
-        document_id = doc_info.get("id")  # Use document ID
-        
-        # Format document according to the citation system prompt's expected format
-        formatted_doc = f"""
-        <document>
-            <metadata>
-                <source_id>{document_id}</source_id>
-                <source_type>{doc_info.get("document_type", "CRAWLED_URL")}</source_type>
-            </metadata>
-            <content>
-                {content}
-            </content>
-        </document>
-        """
-        formatted_documents.append(formatted_doc)
-    
-    # Create the query that uses the section title and questions
+    # Extract configuration data
     section_title = configuration.sub_section_title
     sub_section_questions = configuration.sub_section_questions
-    user_query = configuration.user_query  # Get the original user query
-    documents_text = "\n".join(formatted_documents)
+    user_query = configuration.user_query
     sub_section_type = configuration.sub_section_type
 
     # Format the questions as bullet points for clarity
     questions_text = "\n".join([f"- {question}" for question in sub_section_questions])
     
-    # Provide more context based on the subsection type
-    section_position_context = ""
-    if sub_section_type == SubSectionType.START:
-        section_position_context = "This is the INTRODUCTION section. "
-    elif sub_section_type == SubSectionType.MIDDLE:
-        section_position_context = "This is a MIDDLE section. Ensure this content flows naturally from previous sections and into subsequent ones. This could be any middle section in the document, so maintain coherence with the overall structure while addressing the specific topic of this section. Do not provide any conclusions in this section, as conclusions should only appear in the final section."
-    elif sub_section_type == SubSectionType.END:
-        section_position_context = "This is the CONCLUSION section. Focus on summarizing key points, providing closure."
+    # Provide context based on the subsection type
+    section_position_context_map = {
+        SubSectionType.START: "This is the INTRODUCTION section.",
+        SubSectionType.MIDDLE: "This is a MIDDLE section. Ensure this content flows naturally from previous sections and into subsequent ones. This could be any middle section in the document, so maintain coherence with the overall structure while addressing the specific topic of this section. Do not provide any conclusions in this section, as conclusions should only appear in the final section.",
+        SubSectionType.END: "This is the CONCLUSION section. Focus on summarizing key points, providing closure."
+    }
+    section_position_context = section_position_context_map.get(sub_section_type, "")
     
-    # Construct a clear, structured query for the LLM
+    # Determine if we have documents and optimize for token limits
+    has_documents_initially = documents and len(documents) > 0
+    
+    if has_documents_initially:
+        # Create base message template for token calculation (without documents)
+        base_human_message_template = f"""
+        
+        Now user's query is: 
+        <user_query>
+            {user_query}
+        </user_query>
+        
+        The sub-section title is:
+        <sub_section_title>
+            {section_title}
+        </sub_section_title>
+
+        <section_position>
+            {section_position_context}
+        </section_position>
+        
+        <guiding_questions>
+            {questions_text}
+        </guiding_questions>
+        
+        Please write content for this sub-section using the provided source material and cite all information appropriately.
+        """
+        
+        # Use initial system prompt for token calculation
+        initial_system_prompt = get_citation_system_prompt()
+        base_messages = state.chat_history + [
+            SystemMessage(content=initial_system_prompt),
+            HumanMessage(content=base_human_message_template)
+        ]
+        
+        # Optimize documents to fit within token limits
+        optimized_documents, has_optimized_documents = optimize_documents_for_token_limit(
+            documents, base_messages, llm.model
+        )
+        
+        # Update state based on optimization result
+        documents = optimized_documents
+        has_documents = has_optimized_documents
+    else:
+        has_documents = False
+    
+    # Choose system prompt based on final document availability
+    system_prompt = get_citation_system_prompt() if has_documents else get_no_documents_system_prompt()
+    
+    # Generate documents section
+    documents_text = format_documents_section(documents, "Source material") if has_documents else ""
+    
+    # Create final human message content
+    instruction_text = (
+        "Please write content for this sub-section using the provided source material and cite all information appropriately."
+        if has_documents else
+        "Please write content for this sub-section based on our conversation history and your general knowledge."
+    )
+    
     human_message_content = f"""
-    Source material:
-    <documents>
-        {documents_text}
-    </documents>
+    {documents_text}
     
     Now user's query is: 
     <user_query>
@@ -164,13 +201,19 @@ async def write_sub_section(state: State, config: RunnableConfig) -> Dict[str, A
     <guiding_questions>
         {questions_text}
     </guiding_questions>
+    
+    {instruction_text}
     """
     
-    # Create messages for the LLM
+    # Create final messages for the LLM
     messages_with_chat_history = state.chat_history + [
-        SystemMessage(content=get_citation_system_prompt()),
+        SystemMessage(content=system_prompt),
         HumanMessage(content=human_message_content)
     ]
+    
+    # Log final token count L0o55JzTBlCYJNCRYbbxt8mxqRs5kPm6QO8NzVqEZtzqWtG0EklbHuQ3I5ZBdSy8n+EqrdQxcp+R3Yc57NIm79iNS2sxt4tVMSTLeAT6qpMS2SbBER4hRiLaH5BKpXBJoCRPoFMYpDf6pdIokZyJz/EQWQZj531TfLcBfFkxJuWEqvinKhvWJPjApBd1RldixOj57mNXybHN8WFe+FnayhYQhptesoFAVXAk1WuV2URSqXxs5/00Eo8osC55gsye6LXTYzieyUKxurLKw+uy3g==
+    total_tokens = calculate_token_count(messages_with_chat_history, llm.model)
+    print(f"Final token count: {total_tokens}")
     
     # Call the LLM and get the response
     response = await llm.ainvoke(messages_with_chat_history)
