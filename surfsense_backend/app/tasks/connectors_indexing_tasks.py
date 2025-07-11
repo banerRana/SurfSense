@@ -2,17 +2,19 @@ from typing import Optional, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.future import select
-from sqlalchemy import delete
 from datetime import datetime, timedelta, timezone
-from app.db import Document, DocumentType, Chunk, SearchSourceConnector, SearchSourceConnectorType
+from app.db import Document, DocumentType, Chunk, SearchSourceConnector, SearchSourceConnectorType, SearchSpace
 from app.config import config
 from app.prompts import SUMMARY_PROMPT_TEMPLATE
+from app.services.llm_service import get_user_long_context_llm
 from app.connectors.slack_history import SlackHistory
 from app.connectors.notion_history import NotionHistoryConnector
 from app.connectors.github_connector import GitHubConnector
 from app.connectors.linear_connector import LinearConnector
+from app.connectors.discord_connector import DiscordConnector
 from slack_sdk.errors import SlackApiError
 import logging
+import asyncio
 
 from app.utils.document_converters import generate_content_hash
 
@@ -23,6 +25,9 @@ async def index_slack_messages(
     session: AsyncSession,
     connector_id: int,
     search_space_id: int,
+    user_id: str,
+    start_date: str = None,
+    end_date: str = None,
     update_last_indexed: bool = True
 ) -> Tuple[int, Optional[str]]:
     """
@@ -60,27 +65,35 @@ async def index_slack_messages(
         slack_client = SlackHistory(token=slack_token)
         
         # Calculate date range
-        end_date = datetime.now()
-        
-        # Use last_indexed_at as start date if available, otherwise use 365 days ago
-        if connector.last_indexed_at:
-            # Convert dates to be comparable (both timezone-naive)
-            last_indexed_naive = connector.last_indexed_at.replace(tzinfo=None) if connector.last_indexed_at.tzinfo else connector.last_indexed_at
+        if start_date is None or end_date is None:
+            # Fall back to calculating dates based on last_indexed_at
+            calculated_end_date = datetime.now()
             
-            # Check if last_indexed_at is in the future or after end_date
-            if last_indexed_naive > end_date:
-                logger.warning(f"Last indexed date ({last_indexed_naive.strftime('%Y-%m-%d')}) is in the future. Using 365 days ago instead.")
-                start_date = end_date - timedelta(days=365)
+            # Use last_indexed_at as start date if available, otherwise use 365 days ago
+            if connector.last_indexed_at:
+                # Convert dates to be comparable (both timezone-naive)
+                last_indexed_naive = connector.last_indexed_at.replace(tzinfo=None) if connector.last_indexed_at.tzinfo else connector.last_indexed_at
+                
+                # Check if last_indexed_at is in the future or after end_date
+                if last_indexed_naive > calculated_end_date:
+                    logger.warning(f"Last indexed date ({last_indexed_naive.strftime('%Y-%m-%d')}) is in the future. Using 365 days ago instead.")
+                    calculated_start_date = calculated_end_date - timedelta(days=365)
+                else:
+                    calculated_start_date = last_indexed_naive
+                    logger.info(f"Using last_indexed_at ({calculated_start_date.strftime('%Y-%m-%d')}) as start date")
             else:
-                start_date = last_indexed_naive
-                logger.info(f"Using last_indexed_at ({start_date.strftime('%Y-%m-%d')}) as start date")
+                calculated_start_date = calculated_end_date - timedelta(days=365)  # Use 365 days as default
+                logger.info(f"No last_indexed_at found, using {calculated_start_date.strftime('%Y-%m-%d')} (365 days ago) as start date")
+            
+            # Use calculated dates if not provided
+            start_date_str = start_date if start_date else calculated_start_date.strftime("%Y-%m-%d")
+            end_date_str = end_date if end_date else calculated_end_date.strftime("%Y-%m-%d")
         else:
-            start_date = end_date - timedelta(days=365)  # Use 365 days as default
-            logger.info(f"No last_indexed_at found, using {start_date.strftime('%Y-%m-%d')} (30 days ago) as start date")
-        
-        # Format dates for Slack API
-        start_date_str = start_date.strftime("%Y-%m-%d")
-        end_date_str = end_date.strftime("%Y-%m-%d")
+            # Use provided dates
+            start_date_str = start_date
+            end_date_str = end_date
+            
+        logger.info(f"Indexing Slack messages from {start_date_str} to {end_date_str}")
         
         # Get all channels
         try:
@@ -187,7 +200,7 @@ async def index_slack_messages(
                 
                 document_parts.append("</DOCUMENT>")
                 combined_document_string = '\n'.join(document_parts)
-                content_hash = generate_content_hash(combined_document_string)
+                content_hash = generate_content_hash(combined_document_string, search_space_id)
 
                 # Check if document with this content hash already exists
                 existing_doc_by_hash_result = await session.execute(
@@ -200,8 +213,16 @@ async def index_slack_messages(
                     documents_skipped += 1
                     continue
                 
+                # Get user's long context LLM
+                user_llm = await get_user_long_context_llm(session, user_id)
+                if not user_llm:
+                    logger.error(f"No long context LLM configured for user {user_id}")
+                    skipped_channels.append(f"{channel_name} (no LLM configured)")
+                    documents_skipped += 1
+                    continue
+                
                 # Generate summary
-                summary_chain = SUMMARY_PROMPT_TEMPLATE | config.long_context_llm_instance
+                summary_chain = SUMMARY_PROMPT_TEMPLATE | user_llm
                 summary_result = await summary_chain.ainvoke({"document": combined_document_string})
                 summary_content = summary_result.content
                 summary_embedding = config.embedding_model_instance.embed(summary_content)
@@ -278,6 +299,9 @@ async def index_notion_pages(
     session: AsyncSession,
     connector_id: int,
     search_space_id: int,
+    user_id: str,
+    start_date: str = None,
+    end_date: str = None,
     update_last_indexed: bool = True
 ) -> Tuple[int, Optional[str]]:
     """
@@ -316,20 +340,33 @@ async def index_notion_pages(
         notion_client = NotionHistoryConnector(token=notion_token)
         
         # Calculate date range
-        end_date = datetime.now()
+        if start_date is None or end_date is None:
+            # Fall back to calculating dates
+            calculated_end_date = datetime.now()
+            calculated_start_date = calculated_end_date - timedelta(days=365)  # Check for last 1 year of pages
+            
+            # Use calculated dates if not provided
+            if start_date is None:
+                start_date_iso = calculated_start_date.strftime("%Y-%m-%dT%H:%M:%SZ")
+            else:
+                # Convert YYYY-MM-DD to ISO format
+                start_date_iso = datetime.strptime(start_date, "%Y-%m-%d").strftime("%Y-%m-%dT%H:%M:%SZ")
+                
+            if end_date is None:
+                end_date_iso = calculated_end_date.strftime("%Y-%m-%dT%H:%M:%SZ")
+            else:
+                # Convert YYYY-MM-DD to ISO format
+                end_date_iso = datetime.strptime(end_date, "%Y-%m-%d").strftime("%Y-%m-%dT%H:%M:%SZ")
+        else:
+            # Convert provided dates to ISO format for Notion API
+            start_date_iso = datetime.strptime(start_date, "%Y-%m-%d").strftime("%Y-%m-%dT%H:%M:%SZ")
+            end_date_iso = datetime.strptime(end_date, "%Y-%m-%d").strftime("%Y-%m-%dT%H:%M:%SZ")
         
-        # Check for last 1 year of pages
-        start_date = end_date - timedelta(days=365)
-        
-        # Format dates for Notion API (ISO format)
-        start_date_str = start_date.strftime("%Y-%m-%dT%H:%M:%SZ")
-        end_date_str = end_date.strftime("%Y-%m-%dT%H:%M:%SZ")
-        
-        logger.info(f"Fetching Notion pages from {start_date_str} to {end_date_str}")
+        logger.info(f"Fetching Notion pages from {start_date_iso} to {end_date_iso}")
         
         # Get all pages
         try:
-            pages = notion_client.get_all_pages(start_date=start_date_str, end_date=end_date_str)
+            pages = notion_client.get_all_pages(start_date=start_date_iso, end_date=end_date_iso)
             logger.info(f"Found {len(pages)} Notion pages")
         except Exception as e:
             logger.error(f"Error fetching Notion pages: {str(e)}", exc_info=True)
@@ -437,7 +474,7 @@ async def index_notion_pages(
                 
                 document_parts.append("</DOCUMENT>")
                 combined_document_string = '\n'.join(document_parts)
-                content_hash = generate_content_hash(combined_document_string)
+                content_hash = generate_content_hash(combined_document_string, search_space_id)
 
                 # Check if document with this content hash already exists
                 existing_doc_by_hash_result = await session.execute(
@@ -450,9 +487,17 @@ async def index_notion_pages(
                     documents_skipped += 1
                     continue
                 
+                # Get user's long context LLM
+                user_llm = await get_user_long_context_llm(session, user_id)
+                if not user_llm:
+                    logger.error(f"No long context LLM configured for user {user_id}")
+                    skipped_pages.append(f"{page_title} (no LLM configured)")
+                    documents_skipped += 1
+                    continue
+                
                 # Generate summary
                 logger.debug(f"Generating summary for page {page_title}")
-                summary_chain = SUMMARY_PROMPT_TEMPLATE | config.long_context_llm_instance
+                summary_chain = SUMMARY_PROMPT_TEMPLATE | user_llm
                 summary_result = await summary_chain.ainvoke({"document": combined_document_string})
                 summary_content = summary_result.content
                 summary_embedding = config.embedding_model_instance.embed(summary_content)
@@ -523,6 +568,9 @@ async def index_github_repos(
     session: AsyncSession,
     connector_id: int,
     search_space_id: int,
+    user_id: str,
+    start_date: str = None,
+    end_date: str = None,
     update_last_indexed: bool = True
 ) -> Tuple[int, Optional[str]]:
     """
@@ -574,6 +622,8 @@ async def index_github_repos(
         #    For simplicity, we'll proceed with the list provided.
         #    If a repo is inaccessible, get_repository_files will likely fail gracefully later.
         logger.info(f"Starting indexing for {len(repo_full_names_to_index)} selected repositories.")
+        if start_date and end_date:
+            logger.info(f"Date range requested: {start_date} to {end_date} (Note: GitHub indexing processes all files regardless of dates)")
 
         # 6. Iterate through selected repositories and index files
         for repo_full_name in repo_full_names_to_index:
@@ -608,7 +658,7 @@ async def index_github_repos(
                         logger.warning(f"Could not retrieve content for {full_path_key}. Skipping.")
                         continue # Skip if content fetch failed
                         
-                    content_hash = generate_content_hash(file_content)
+                    content_hash = generate_content_hash(file_content, search_space_id)
 
                     # Check if document with this content hash already exists
                     existing_doc_by_hash_result = await session.execute(
@@ -687,6 +737,9 @@ async def index_linear_issues(
     session: AsyncSession,
     connector_id: int,
     search_space_id: int,
+    user_id: str,
+    start_date: str = None,
+    end_date: str = None,
     update_last_indexed: bool = True
 ) -> Tuple[int, Optional[str]]:
     """
@@ -724,27 +777,33 @@ async def index_linear_issues(
         linear_client = LinearConnector(token=linear_token)
         
         # Calculate date range
-        end_date = datetime.now()
-        
-        # Use last_indexed_at as start date if available, otherwise use 365 days ago
-        if connector.last_indexed_at:
-            # Convert dates to be comparable (both timezone-naive)
-            last_indexed_naive = connector.last_indexed_at.replace(tzinfo=None) if connector.last_indexed_at.tzinfo else connector.last_indexed_at
+        if start_date is None or end_date is None:
+            # Fall back to calculating dates based on last_indexed_at
+            calculated_end_date = datetime.now()
             
-            # Check if last_indexed_at is in the future or after end_date
-            if last_indexed_naive > end_date:
-                logger.warning(f"Last indexed date ({last_indexed_naive.strftime('%Y-%m-%d')}) is in the future. Using 365 days ago instead.")
-                start_date = end_date - timedelta(days=365)
+            # Use last_indexed_at as start date if available, otherwise use 365 days ago
+            if connector.last_indexed_at:
+                # Convert dates to be comparable (both timezone-naive)
+                last_indexed_naive = connector.last_indexed_at.replace(tzinfo=None) if connector.last_indexed_at.tzinfo else connector.last_indexed_at
+                
+                # Check if last_indexed_at is in the future or after end_date
+                if last_indexed_naive > calculated_end_date:
+                    logger.warning(f"Last indexed date ({last_indexed_naive.strftime('%Y-%m-%d')}) is in the future. Using 365 days ago instead.")
+                    calculated_start_date = calculated_end_date - timedelta(days=365)
+                else:
+                    calculated_start_date = last_indexed_naive
+                    logger.info(f"Using last_indexed_at ({calculated_start_date.strftime('%Y-%m-%d')}) as start date")
             else:
-                start_date = last_indexed_naive
-                logger.info(f"Using last_indexed_at ({start_date.strftime('%Y-%m-%d')}) as start date")
+                calculated_start_date = calculated_end_date - timedelta(days=365)  # Use 365 days as default
+                logger.info(f"No last_indexed_at found, using {calculated_start_date.strftime('%Y-%m-%d')} (365 days ago) as start date")
+            
+            # Use calculated dates if not provided
+            start_date_str = start_date if start_date else calculated_start_date.strftime("%Y-%m-%d")
+            end_date_str = end_date if end_date else calculated_end_date.strftime("%Y-%m-%d")
         else:
-            start_date = end_date - timedelta(days=365)  # Use 365 days as default
-            logger.info(f"No last_indexed_at found, using {start_date.strftime('%Y-%m-%d')} (365 days ago) as start date")
-        
-        # Format dates for Linear API
-        start_date_str = start_date.strftime("%Y-%m-%d")
-        end_date_str = end_date.strftime("%Y-%m-%d")
+            # Use provided dates
+            start_date_str = start_date
+            end_date_str = end_date
         
         logger.info(f"Fetching Linear issues from {start_date_str} to {end_date_str}")
         
@@ -838,7 +897,7 @@ async def index_linear_issues(
                 comment_count = len(formatted_issue.get("comments", []))
                 summary_content += f"Comments: {comment_count}"
                 
-                content_hash = generate_content_hash(issue_content)
+                content_hash = generate_content_hash(issue_content, search_space_id)
 
                 # Check if document with this content hash already exists
                 existing_doc_by_hash_result = await session.execute(
@@ -912,3 +971,285 @@ async def index_linear_issues(
         await session.rollback()
         logger.error(f"Failed to index Linear issues: {str(e)}", exc_info=True)
         return 0, f"Failed to index Linear issues: {str(e)}"
+
+async def index_discord_messages(
+    session: AsyncSession,
+    connector_id: int,
+    search_space_id: int,
+    user_id: str,
+    start_date: str = None,
+    end_date: str = None,
+    update_last_indexed: bool = True
+) -> Tuple[int, Optional[str]]:
+    """
+    Index Discord messages from all accessible channels.
+
+    Args:
+        session: Database session
+        connector_id: ID of the Discord connector
+        search_space_id: ID of the search space to store documents in
+        update_last_indexed: Whether to update the last_indexed_at timestamp (default: True)
+
+    Returns:
+        Tuple containing (number of documents indexed, error message or None)
+    """
+    try:
+        # Get the connector
+        result = await session.execute(
+            select(SearchSourceConnector)
+            .filter(
+                SearchSourceConnector.id == connector_id,
+                SearchSourceConnector.connector_type == SearchSourceConnectorType.DISCORD_CONNECTOR
+            )
+        )
+        connector = result.scalars().first()
+
+        if not connector:
+            return 0, f"Connector with ID {connector_id} not found or is not a Discord connector"
+
+        # Get the Discord token from the connector config
+        discord_token = connector.config.get("DISCORD_BOT_TOKEN")
+        if not discord_token:
+            return 0, "Discord token not found in connector config"
+
+        logger.info(f"Starting Discord indexing for connector {connector_id}")
+
+        # Initialize Discord client
+        discord_client = DiscordConnector(token=discord_token)
+
+        # Calculate date range
+        if start_date is None or end_date is None:
+            # Fall back to calculating dates based on last_indexed_at
+            calculated_end_date = datetime.now(timezone.utc)
+
+            # Use last_indexed_at as start date if available, otherwise use 365 days ago
+            if connector.last_indexed_at:
+                calculated_start_date = connector.last_indexed_at.replace(tzinfo=timezone.utc)
+                logger.info(f"Using last_indexed_at ({calculated_start_date.strftime('%Y-%m-%d')}) as start date")
+            else:
+                calculated_start_date = calculated_end_date - timedelta(days=365)
+                logger.info(f"No last_indexed_at found, using {calculated_start_date.strftime('%Y-%m-%d')} (365 days ago) as start date")
+
+            # Use calculated dates if not provided, convert to ISO format for Discord API
+            if start_date is None:
+                start_date_iso = calculated_start_date.isoformat()
+            else:
+                # Convert YYYY-MM-DD to ISO format
+                start_date_iso = datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=timezone.utc).isoformat()
+                
+            if end_date is None:
+                end_date_iso = calculated_end_date.isoformat()
+            else:
+                # Convert YYYY-MM-DD to ISO format  
+                end_date_iso = datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc).isoformat()
+        else:
+            # Convert provided dates to ISO format for Discord API
+            start_date_iso = datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=timezone.utc).isoformat()
+            end_date_iso = datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc).isoformat()
+            
+        logger.info(f"Indexing Discord messages from {start_date_iso} to {end_date_iso}")
+
+        documents_indexed = 0
+        documents_skipped = 0
+        skipped_channels = []
+
+        try:
+            logger.info("Starting Discord bot to fetch guilds")
+            discord_client._bot_task = asyncio.create_task(discord_client.start_bot())
+            await discord_client._wait_until_ready()
+
+            logger.info("Fetching Discord guilds")
+            guilds = await discord_client.get_guilds()
+            logger.info(f"Found {len(guilds)} guilds")
+        except Exception as e:
+            logger.error(f"Failed to get Discord guilds: {str(e)}", exc_info=True)
+            await discord_client.close_bot()
+            return 0, f"Failed to get Discord guilds: {str(e)}"
+        if not guilds:
+            logger.info("No Discord guilds found to index")
+            await discord_client.close_bot()
+            return 0, "No Discord guilds found"
+
+        # Process each guild and channel
+        for guild in guilds:
+            guild_id = guild["id"]
+            guild_name = guild["name"]
+            logger.info(f"Processing guild: {guild_name} ({guild_id})")
+            try:
+                channels = await discord_client.get_text_channels(guild_id)
+                if not channels:
+                    logger.info(f"No channels found in guild {guild_name}. Skipping.")
+                    skipped_channels.append(f"{guild_name} (no channels)")
+                    documents_skipped += 1
+                    continue
+
+                for channel in channels:
+                    channel_id = channel["id"]
+                    channel_name = channel["name"]
+
+                    try:
+                        messages = await discord_client.get_channel_history(
+                            channel_id=channel_id,
+                            start_date=start_date_iso,
+                            end_date=end_date_iso,
+                        )
+                    except Exception as e:
+                        logger.error(f"Failed to get messages for channel {channel_name}: {str(e)}")
+                        skipped_channels.append(f"{guild_name}#{channel_name} (fetch error)")
+                        documents_skipped += 1
+                        continue
+
+                    if not messages:
+                        logger.info(f"No messages found in channel {channel_name} for the specified date range.")
+                        documents_skipped += 1
+                        continue
+
+                    # Format messages
+                    formatted_messages = []
+                    for msg in messages:
+                        # Skip system messages if needed (Discord has some types)
+                        if msg.get("type") in ["system"]:
+                            continue
+                        formatted_messages.append(msg)
+
+                    if not formatted_messages:
+                        logger.info(f"No valid messages found in channel {channel_name} after filtering.")
+                        documents_skipped += 1
+                        continue
+
+                    # Convert messages to markdown format
+                    channel_content = f"# Discord Channel: {guild_name} / {channel_name}\n\n"
+                    for msg in formatted_messages:
+                        user_name = msg.get("author_name", "Unknown User")
+                        timestamp = msg.get("created_at", "Unknown Time")
+                        text = msg.get("content", "")
+                        channel_content += f"## {user_name} ({timestamp})\n\n{text}\n\n---\n\n"
+
+                    # Format document metadata
+                    metadata_sections = [
+                        ("METADATA", [
+                            f"GUILD_NAME: {guild_name}",
+                            f"GUILD_ID: {guild_id}",
+                            f"CHANNEL_NAME: {channel_name}",
+                            f"CHANNEL_ID: {channel_id}",
+                            f"MESSAGE_COUNT: {len(formatted_messages)}"
+                        ]),
+                        ("CONTENT", [
+                            "FORMAT: markdown",
+                            "TEXT_START",
+                            channel_content,
+                            "TEXT_END"
+                        ])
+                    ]
+
+                    # Build the document string
+                    document_parts = []
+                    document_parts.append("<DOCUMENT>")
+                    for section_title, section_content in metadata_sections:
+                        document_parts.append(f"<{section_title}>")
+                        document_parts.extend(section_content)
+                        document_parts.append(f"</{section_title}>")
+                    document_parts.append("</DOCUMENT>")
+                    combined_document_string = '\n'.join(document_parts)
+                    content_hash = generate_content_hash(combined_document_string, search_space_id)
+
+                    # Check if document with this content hash already exists
+                    existing_doc_by_hash_result = await session.execute(
+                        select(Document).where(Document.content_hash == content_hash)
+                    )
+                    existing_document_by_hash = existing_doc_by_hash_result.scalars().first()
+
+                    if existing_document_by_hash:
+                        logger.info(f"Document with content hash {content_hash} already exists for channel {guild_name}#{channel_name}. Skipping processing.")
+                        documents_skipped += 1
+                        continue
+
+                    # Get user's long context LLM
+                    user_llm = await get_user_long_context_llm(session, user_id)
+                    if not user_llm:
+                        logger.error(f"No long context LLM configured for user {user_id}")
+                        skipped_channels.append(f"{guild_name}#{channel_name} (no LLM configured)")
+                        documents_skipped += 1
+                        continue
+
+                    # Generate summary using summary_chain
+                    summary_chain = SUMMARY_PROMPT_TEMPLATE | user_llm
+                    summary_result = await summary_chain.ainvoke({"document": combined_document_string})
+                    summary_content = summary_result.content
+                    summary_embedding = await asyncio.to_thread(
+                        config.embedding_model_instance.embed, summary_content
+                    )
+
+                    # Process chunks
+                    raw_chunks = await asyncio.to_thread(
+                        config.chunker_instance.chunk,
+                        channel_content
+                    )
+
+                    chunk_texts = [chunk.text for chunk in raw_chunks if chunk.text.strip()]
+                    chunk_embeddings = await asyncio.to_thread(
+                        lambda texts: [config.embedding_model_instance.embed(t) for t in texts],
+                        chunk_texts
+                    )
+
+                    chunks = [
+                        Chunk(content=raw_chunk.text, embedding=embedding)
+                        for raw_chunk, embedding in zip(raw_chunks, chunk_embeddings)
+                    ]
+
+                    # Create and store new document
+                    document = Document(
+                        search_space_id=search_space_id,
+                        title=f"Discord - {guild_name}#{channel_name}",
+                        document_type=DocumentType.DISCORD_CONNECTOR,
+                        document_metadata={
+                            "guild_name": guild_name,
+                            "guild_id": guild_id,
+                            "channel_name": channel_name,
+                            "channel_id": channel_id,
+                            "message_count": len(formatted_messages),
+                            "start_date": start_date_iso,
+                            "end_date": end_date_iso,
+                            "indexed_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+                        },
+                        content=summary_content,
+                        content_hash=content_hash,
+                        embedding=summary_embedding,
+                        chunks=chunks
+                    )
+
+                    session.add(document)
+                    documents_indexed += 1
+                    logger.info(f"Successfully indexed new channel {guild_name}#{channel_name} with {len(formatted_messages)} messages")
+
+            except Exception as e:
+                logger.error(f"Error processing guild {guild_name}: {str(e)}", exc_info=True)
+                skipped_channels.append(f"{guild_name} (processing error)")
+                documents_skipped += 1
+                continue
+
+        if update_last_indexed and documents_indexed > 0:
+            connector.last_indexed_at = datetime.now(timezone.utc)
+            logger.info(f"Updated last_indexed_at to {connector.last_indexed_at}")
+
+        await session.commit()
+        await discord_client.close_bot()
+
+        # Prepare result message
+        result_message = None
+        if skipped_channels:
+            result_message = f"Processed {documents_indexed} channels. Skipped {len(skipped_channels)} channels: {', '.join(skipped_channels)}"
+        else:
+            result_message = f"Processed {documents_indexed} channels."
+
+        logger.info(f"Discord indexing completed: {documents_indexed} new channels, {documents_skipped} skipped")
+        return documents_indexed, result_message
+
+    except SQLAlchemyError as db_error:
+        await session.rollback()
+        logger.error(f"Database error during Discord indexing: {str(db_error)}", exc_info=True)
+        return 0, f"Database error: {str(db_error)}"
+    except Exception as e:
+        await session.rollback()
+        logger.error(f"Failed to index Discord messages: {str(e)}", exc_info=True)
+        return 0, f"Failed to index Discord messages: {str(e)}"
