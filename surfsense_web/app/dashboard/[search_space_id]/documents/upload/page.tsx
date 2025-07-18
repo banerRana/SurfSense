@@ -4,7 +4,7 @@ import { useState, useCallback, useRef } from "react"
 import { useDropzone } from "react-dropzone"
 import { Button } from "@/components/ui/button"
 import { toast } from "sonner"
-import { X, Upload, FileIcon, Tag, AlertCircle, CheckCircle2, Calendar, FileType } from "lucide-react"
+import { X, Upload, Tag, CheckCircle2, Calendar, FileType } from "lucide-react"
 import { useRouter, useParams } from "next/navigation"
 import { motion, AnimatePresence } from "framer-motion"
 
@@ -48,6 +48,8 @@ export default function FileUploader() {
         'audio/mp4': ['.mp4', '.m4a'],
         'audio/wav': ['.wav'],
         'audio/webm': ['.webm'],
+        'text/markdown': ['.md', '.markdown'],
+        'text/plain': ['.txt'],
     };
 
     // Conditionally set accepted file types based on ETL service
@@ -82,7 +84,6 @@ export default function FileUploader() {
             'application/vnd.oasis.opendocument.graphics': ['.odg'],
             'application/vnd.oasis.opendocument.spreadsheet': ['.ods'],
             'application/vnd.oasis.opendocument.formula': ['.fods'],
-            'text/plain': ['.txt'],
             'text/csv': ['.csv'],
             'text/tab-separated-values': ['.tsv'],
             'text/html': ['.html', '.htm', '.web'],
@@ -112,7 +113,6 @@ export default function FileUploader() {
             'text/html': ['.html'],
             'image/jpeg': ['.jpeg', '.jpg'],
             'image/png': ['.png'],
-            'text/markdown': ['.md', '.markdown'],
             'application/vnd.ms-outlook': ['.msg'],
             'application/vnd.oasis.opendocument.text': ['.odt'],
             'text/x-org': ['.org'],
@@ -123,7 +123,6 @@ export default function FileUploader() {
             'text/x-rst': ['.rst'],
             'application/rtf': ['.rtf'],
             'image/tiff': ['.tiff'],
-            'text/plain': ['.txt'],
             'text/tab-separated-values': ['.tsv'],
             'application/vnd.ms-excel': ['.xls'],
             'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'],
@@ -171,9 +170,9 @@ export default function FileUploader() {
         formData.append('search_space_id', search_space_id)
 
         try {
-            toast("File Upload", {
-                description: "Files Uploading Initiated",
-            })
+            // toast("File Upload", {
+            //     description: "Files Uploading Initiated",
+            // })
 
             const response = await fetch(`${process.env.NEXT_PUBLIC_FASTAPI_BACKEND_URL!}/api/v1/documents/fileupload`, {
                 method: "POST",
@@ -189,8 +188,8 @@ export default function FileUploader() {
 
             await response.json()
 
-            toast("Upload Successful", {
-                description: "Files Uploaded Successfully",
+            toast("Upload Task Initiated", {
+                description: "Files Uploading Initiated",
             })
 
             router.push(`/dashboard/${search_space_id}/documents`);

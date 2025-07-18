@@ -13,6 +13,8 @@ from .chunks import ChunkBase, ChunkCreate, ChunkUpdate, ChunkRead
 from .podcasts import PodcastBase, PodcastCreate, PodcastUpdate, PodcastRead, PodcastGenerateRequest
 from .chats import ChatBase, ChatCreate, ChatUpdate, ChatRead, AISDKChatRequest
 from .search_source_connector import SearchSourceConnectorBase, SearchSourceConnectorCreate, SearchSourceConnectorUpdate, SearchSourceConnectorRead
+from .llm_config import LLMConfigBase, LLMConfigCreate, LLMConfigUpdate, LLMConfigRead
+from .logs import LogBase, LogCreate, LogUpdate, LogRead, LogFilter
 
 __all__ = [
     "AISDKChatRequest",
@@ -48,4 +50,13 @@ __all__ = [
     "SearchSourceConnectorCreate",
     "SearchSourceConnectorUpdate",
     "SearchSourceConnectorRead",
+    "LLMConfigBase",
+    "LLMConfigCreate",
+    "LLMConfigUpdate",
+    "LLMConfigRead",
+    "LogBase",
+    "LogCreate",
+    "LogUpdate",
+    "LogRead",
+    "LogFilter",
 ] 

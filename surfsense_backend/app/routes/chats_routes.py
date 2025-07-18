@@ -30,6 +30,7 @@ async def handle_chat_data(
     search_space_id = request.data.get('search_space_id')
     research_mode: str = request.data.get('research_mode')
     selected_connectors: List[str] = request.data.get('selected_connectors')
+    document_ids_to_add_in_context: List[int] = request.data.get('document_ids_to_add_in_context')
     
     search_mode_str = request.data.get('search_mode', "CHUNKS")
 
@@ -53,10 +54,14 @@ async def handle_chat_data(
         if message['role'] == "user":
             langchain_chat_history.append(HumanMessage(content=message['content']))
         elif message['role'] == "assistant":
-            # Last annotation type will always be "ANSWER" here
-            answer_annotation = message['annotations'][-1]
-            answer_text = ""
-            if answer_annotation['type'] == "ANSWER":
+            # Find the last "ANSWER" annotation specifically
+            answer_annotation = None
+            for annotation in reversed(message['annotations']):
+                if annotation['type'] == "ANSWER":
+                    answer_annotation = annotation
+                    break
+            
+            if answer_annotation:
                 answer_text = answer_annotation['content']
                 # If content is a list, join it into a single string
                 if isinstance(answer_text, list):
@@ -71,7 +76,8 @@ async def handle_chat_data(
         research_mode,
         selected_connectors,
         langchain_chat_history,
-        search_mode_str
+        search_mode_str,
+        document_ids_to_add_in_context
     ))
     response.headers['x-vercel-ai-data-stream'] = 'v1'
     return response

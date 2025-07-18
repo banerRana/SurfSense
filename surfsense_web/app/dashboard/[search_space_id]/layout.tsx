@@ -12,7 +12,6 @@ export default function DashboardLayout({
   // Use React.use to unwrap the params Promise
   const { search_space_id } = use(params);
 
-  // TODO: Get search space name from our FastAPI backend
   const customNavSecondary = [
     {
       title: `All Search Spaces`,
@@ -44,10 +43,10 @@ export default function DashboardLayout({
           title: "Upload Documents",
           url: `/dashboard/${search_space_id}/documents/upload`,
         },
-        {
-          title: "Add Webpages",
-          url: `/dashboard/${search_space_id}/documents/webpage`,
-        },
+        // { TODO: FIX THIS AND ADD IT BACK
+        //   title: "Add Webpages",
+        //   url: `/dashboard/${search_space_id}/documents/webpage`,
+        // },
         {
           title: "Add Youtube Videos",
           url: `/dashboard/${search_space_id}/documents/youtube`,
@@ -79,23 +78,14 @@ export default function DashboardLayout({
       icon: "Podcast",
       items: [
       ],
+    },
+    {
+      title: "Logs",
+      url: `/dashboard/${search_space_id}/logs`,
+      icon: "FileText",
+      items: [
+      ],
     }
-    // TODO: Add research synthesizer's
-    // {
-    //   title: "Research Synthesizer's",
-    //   url: `#`,
-    //   icon: "SquareLibrary",
-    //   items: [
-    //     {
-    //       title: "Podcast Creator",
-    //       url: `/dashboard/${search_space_id}/synthesizer/podcast`,
-    //     },
-    //     {
-    //       title: "Presentation Creator",
-    //       url: `/dashboard/${search_space_id}/synthesizer/presentation`,
-    //     },
-    //   ],
-    // },
   ]
 
   return (

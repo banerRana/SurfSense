@@ -50,6 +50,7 @@ class DocumentType(str, Enum):
     YOUTUBE_VIDEO = "YOUTUBE_VIDEO"
     GITHUB_CONNECTOR = "GITHUB_CONNECTOR"
     LINEAR_CONNECTOR = "LINEAR_CONNECTOR"
+    DISCORD_CONNECTOR = "DISCORD_CONNECTOR"
 
 class SearchSourceConnectorType(str, Enum):
     SERPER_API = "SERPER_API" # NOT IMPLEMENTED YET : DON'T REMEMBER WHY : MOST PROBABLY BECAUSE WE NEED TO CRAWL THE RESULTS RETURNED BY IT
@@ -59,12 +60,49 @@ class SearchSourceConnectorType(str, Enum):
     NOTION_CONNECTOR = "NOTION_CONNECTOR"
     GITHUB_CONNECTOR = "GITHUB_CONNECTOR"
     LINEAR_CONNECTOR = "LINEAR_CONNECTOR"
+    DISCORD_CONNECTOR = "DISCORD_CONNECTOR"
     
 class ChatType(str, Enum):
-    GENERAL = "GENERAL"
-    DEEP = "DEEP"
-    DEEPER = "DEEPER"
-    DEEPEST = "DEEPEST"
+    QNA = "QNA"
+    REPORT_GENERAL = "REPORT_GENERAL"
+    REPORT_DEEP = "REPORT_DEEP"
+    REPORT_DEEPER = "REPORT_DEEPER"
+
+class LiteLLMProvider(str, Enum):
+    OPENAI = "OPENAI"
+    ANTHROPIC = "ANTHROPIC"
+    GROQ = "GROQ"
+    COHERE = "COHERE"
+    HUGGINGFACE = "HUGGINGFACE"
+    AZURE_OPENAI = "AZURE_OPENAI"
+    GOOGLE = "GOOGLE"
+    AWS_BEDROCK = "AWS_BEDROCK"
+    OLLAMA = "OLLAMA"
+    MISTRAL = "MISTRAL"
+    TOGETHER_AI = "TOGETHER_AI"
+    REPLICATE = "REPLICATE"
+    PALM = "PALM"
+    VERTEX_AI = "VERTEX_AI"
+    ANYSCALE = "ANYSCALE"
+    PERPLEXITY = "PERPLEXITY"
+    DEEPINFRA = "DEEPINFRA"
+    AI21 = "AI21"
+    NLPCLOUD = "NLPCLOUD"
+    ALEPH_ALPHA = "ALEPH_ALPHA"
+    PETALS = "PETALS"
+    CUSTOM = "CUSTOM"
+
+class LogLevel(str, Enum):
+    DEBUG = "DEBUG"
+    INFO = "INFO"
+    WARNING = "WARNING"
+    ERROR = "ERROR"
+    CRITICAL = "CRITICAL"
+
+class LogStatus(str, Enum):
+    IN_PROGRESS = "IN_PROGRESS"
+    SUCCESS = "SUCCESS"
+    FAILED = "FAILED"
     
 class Base(DeclarativeBase):
     pass
@@ -137,6 +175,7 @@ class SearchSpace(BaseModel, TimestampMixin):
     documents = relationship("Document", back_populates="search_space", order_by="Document.id", cascade="all, delete-orphan")
     podcasts = relationship("Podcast", back_populates="search_space", order_by="Podcast.id", cascade="all, delete-orphan")
     chats = relationship('Chat', back_populates='search_space', order_by='Chat.id', cascade="all, delete-orphan")
+    logs = relationship("Log", back_populates="search_space", order_by="Log.id", cascade="all, delete-orphan")
     
 class SearchSourceConnector(BaseModel, TimestampMixin):
     __tablename__ = "search_source_connectors"
@@ -150,6 +189,38 @@ class SearchSourceConnector(BaseModel, TimestampMixin):
     user_id = Column(UUID(as_uuid=True), ForeignKey("user.id", ondelete='CASCADE'), nullable=False)
     user = relationship("User", back_populates="search_source_connectors")
 
+class LLMConfig(BaseModel, TimestampMixin):
+    __tablename__ = "llm_configs"
+    
+    name = Column(String(100), nullable=False, index=True)
+    # Provider from the enum
+    provider = Column(SQLAlchemyEnum(LiteLLMProvider), nullable=False)
+    # Custom provider name when provider is CUSTOM
+    custom_provider = Column(String(100), nullable=True)
+    # Just the model name without provider prefix
+    model_name = Column(String(100), nullable=False)
+    # API Key should be encrypted before storing
+    api_key = Column(String, nullable=False)
+    api_base = Column(String(500), nullable=True)
+    
+    # For any other parameters that litellm supports
+    litellm_params = Column(JSON, nullable=True, default={})
+    
+    user_id = Column(UUID(as_uuid=True), ForeignKey("user.id", ondelete='CASCADE'), nullable=False)
+    user = relationship("User", back_populates="llm_configs", foreign_keys=[user_id])
+
+class Log(BaseModel, TimestampMixin):
+    __tablename__ = "logs"
+    
+    level = Column(SQLAlchemyEnum(LogLevel), nullable=False, index=True)
+    status = Column(SQLAlchemyEnum(LogStatus), nullable=False, index=True)
+    message = Column(Text, nullable=False)
+    source = Column(String(200), nullable=True, index=True)  # Service/component that generated the log
+    log_metadata = Column(JSON, nullable=True, default={})  # Additional context data
+    
+    search_space_id = Column(Integer, ForeignKey("searchspaces.id", ondelete='CASCADE'), nullable=False)
+    search_space = relationship("SearchSpace", back_populates="logs")
+
 if config.AUTH_TYPE == "GOOGLE":
     class OAuthAccount(SQLAlchemyBaseOAuthAccountTableUUID, Base):
         pass
@@ -161,11 +232,29 @@ if config.AUTH_TYPE == "GOOGLE":
         )
         search_spaces = relationship("SearchSpace", back_populates="user")
         search_source_connectors = relationship("SearchSourceConnector", back_populates="user")
+        llm_configs = relationship("LLMConfig", back_populates="user", foreign_keys="LLMConfig.user_id", cascade="all, delete-orphan")
+
+        long_context_llm_id = Column(Integer, ForeignKey("llm_configs.id", ondelete="SET NULL"), nullable=True)
+        fast_llm_id = Column(Integer, ForeignKey("llm_configs.id", ondelete="SET NULL"), nullable=True)
+        strategic_llm_id = Column(Integer, ForeignKey("llm_configs.id", ondelete="SET NULL"), nullable=True)
+
+        long_context_llm = relationship("LLMConfig", foreign_keys=[long_context_llm_id], post_update=True)
+        fast_llm = relationship("LLMConfig", foreign_keys=[fast_llm_id], post_update=True)
+        strategic_llm = relationship("LLMConfig", foreign_keys=[strategic_llm_id], post_update=True)
 else:
     class User(SQLAlchemyBaseUserTableUUID, Base):
 
         search_spaces = relationship("SearchSpace", back_populates="user")
         search_source_connectors = relationship("SearchSourceConnector", back_populates="user")
+        llm_configs = relationship("LLMConfig", back_populates="user", foreign_keys="LLMConfig.user_id", cascade="all, delete-orphan")
+
+        long_context_llm_id = Column(Integer, ForeignKey("llm_configs.id", ondelete="SET NULL"), nullable=True)
+        fast_llm_id = Column(Integer, ForeignKey("llm_configs.id", ondelete="SET NULL"), nullable=True)
+        strategic_llm_id = Column(Integer, ForeignKey("llm_configs.id", ondelete="SET NULL"), nullable=True)
+
+        long_context_llm = relationship("LLMConfig", foreign_keys=[long_context_llm_id], post_update=True)
+        fast_llm = relationship("LLMConfig", foreign_keys=[fast_llm_id], post_update=True)
+        strategic_llm = relationship("LLMConfig", foreign_keys=[strategic_llm_id], post_update=True)
 
 
 engine = create_async_engine(DATABASE_URL)

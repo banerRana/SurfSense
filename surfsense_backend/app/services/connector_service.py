@@ -1,24 +1,48 @@
-import json
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Optional
 import asyncio
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from app.retriver.chunks_hybrid_search import ChucksHybridSearchRetriever
 from app.retriver.documents_hybrid_search import DocumentHybridSearchRetriever
-from app.db import SearchSourceConnector, SearchSourceConnectorType
+from app.db import SearchSourceConnector, SearchSourceConnectorType, Chunk, Document, SearchSpace
 from tavily import TavilyClient
 from linkup import LinkupClient
+from sqlalchemy import func
 
 from app.agents.researcher.configuration import SearchMode
 
 
 class ConnectorService:
-    def __init__(self, session: AsyncSession):
+    def __init__(self, session: AsyncSession, user_id: str = None):
         self.session = session
         self.chunk_retriever = ChucksHybridSearchRetriever(session)
         self.document_retriever = DocumentHybridSearchRetriever(session)
-        self.source_id_counter = 1
+        self.user_id = user_id
+        self.source_id_counter = 100000  # High starting value to avoid collisions with existing IDs
         self.counter_lock = asyncio.Lock()  # Lock to protect counter in multithreaded environments
+    
+    async def initialize_counter(self):
+        """
+        Initialize the source_id_counter based on the total number of chunks for the user.
+        This ensures unique IDs across different sessions.
+        """
+        if self.user_id:
+            try:
+                # Count total chunks for documents belonging to this user
+
+                result = await self.session.execute(
+                    select(func.count(Chunk.id))
+                    .join(Document)
+                    .join(SearchSpace)
+                    .filter(SearchSpace.user_id == self.user_id)
+                )
+                chunk_count = result.scalar() or 0
+                self.source_id_counter = chunk_count + 1
+                print(f"Initialized source_id_counter to {self.source_id_counter} for user {self.user_id}")
+            except Exception as e:
+                print(f"Error initializing source_id_counter: {str(e)}")
+                # Fallback to default value
+                self.source_id_counter = 1
     
     async def search_crawled_urls(self, user_query: str, user_id: str, search_space_id: int, top_k: int = 20, search_mode: SearchMode = SearchMode.CHUNKS) -> tuple:
         """
@@ -58,16 +82,14 @@ class ConnectorService:
         # Process each chunk and create sources directly without deduplication
         sources_list = []
         async with self.counter_lock:
-            for i, chunk in enumerate(crawled_urls_chunks):
-                # Fix for UI
-                crawled_urls_chunks[i]['document']['id'] = self.source_id_counter
+            for _i, chunk in enumerate(crawled_urls_chunks):
                 # Extract document metadata
                 document = chunk.get('document', {})
                 metadata = document.get('metadata', {})
 
                 # Create a source entry
                 source = {
-                    "id":  self.source_id_counter,
+                    "id": document.get('id', self.source_id_counter),
                     "title": document.get('title', 'Untitled Document'),
                     "description": metadata.get('og:description', metadata.get('ogDescription', chunk.get('content', '')[:100])),
                     "url": metadata.get('url', '')
@@ -124,16 +146,14 @@ class ConnectorService:
         # Process each chunk and create sources directly without deduplication
         sources_list = []
         async with self.counter_lock:
-            for i, chunk in enumerate(files_chunks):
-                # Fix for UI
-                files_chunks[i]['document']['id'] = self.source_id_counter
+            for _i, chunk in enumerate(files_chunks):
                 # Extract document metadata
                 document = chunk.get('document', {})
                 metadata = document.get('metadata', {})
 
                 # Create a source entry
                 source = {
-                    "id":  self.source_id_counter,
+                    "id": document.get('id', self.source_id_counter),
                     "title": document.get('title', 'Untitled Document'),
                     "description": metadata.get('og:description', metadata.get('ogDescription', chunk.get('content', '')[:100])),
                     "url": metadata.get('url', '')
@@ -338,9 +358,7 @@ class ConnectorService:
         # Process each chunk and create sources directly without deduplication
         sources_list = []
         async with self.counter_lock:
-            for i, chunk in enumerate(slack_chunks):
-                # Fix for UI
-                slack_chunks[i]['document']['id'] = self.source_id_counter
+            for _i, chunk in enumerate(slack_chunks):
                 # Extract document metadata
                 document = chunk.get('document', {})
                 metadata = document.get('metadata', {})
@@ -366,7 +384,7 @@ class ConnectorService:
                     url = f"https://slack.com/app_redirect?channel={channel_id}"
 
                 source = {
-                    "id": self.source_id_counter,
+                    "id": document.get('id', self.source_id_counter),
                     "title": title,
                     "description": description,
                     "url": url,
@@ -429,10 +447,7 @@ class ConnectorService:
         # Process each chunk and create sources directly without deduplication
         sources_list = []
         async with self.counter_lock:
-            for i, chunk in enumerate(notion_chunks):
-                # Fix for UI
-                notion_chunks[i]['document']['id'] = self.source_id_counter
-                
+            for _i, chunk in enumerate(notion_chunks):
                 # Extract document metadata
                 document = chunk.get('document', {})
                 metadata = document.get('metadata', {})
@@ -459,7 +474,7 @@ class ConnectorService:
                     url = f"https://notion.so/{page_id.replace('-', '')}"
 
                 source = {
-                    "id": self.source_id_counter,
+                    "id": document.get('id', self.source_id_counter),
                     "title": title,
                     "description": description,
                     "url": url,
@@ -523,9 +538,6 @@ class ConnectorService:
         sources_list = []
         async with self.counter_lock:
             for i, chunk in enumerate(extension_chunks):
-                # Fix for UI
-                extension_chunks[i]['document']['id'] = self.source_id_counter
-                
                 # Extract document metadata
                 document = chunk.get('document', {})
                 metadata = document.get('metadata', {})
@@ -570,7 +582,7 @@ class ConnectorService:
                         pass
 
                 source = {
-                    "id": self.source_id_counter,
+                    "id": document.get('id', self.source_id_counter),
                     "title": title,
                     "description": description,
                     "url": webpage_url
@@ -633,10 +645,7 @@ class ConnectorService:
         # Process each chunk and create sources directly without deduplication
         sources_list = []
         async with self.counter_lock:
-            for i, chunk in enumerate(youtube_chunks):
-                # Fix for UI
-                youtube_chunks[i]['document']['id'] = self.source_id_counter
-                
+            for _i, chunk in enumerate(youtube_chunks):
                 # Extract document metadata
                 document = chunk.get('document', {})
                 metadata = document.get('metadata', {})
@@ -645,7 +654,7 @@ class ConnectorService:
                 video_title = metadata.get('video_title', 'Untitled Video')
                 video_id = metadata.get('video_id', '')
                 channel_name = metadata.get('channel_name', '')
-                published_date = metadata.get('published_date', '')
+                # published_date = metadata.get('published_date', '')
                 
                 # Create a more descriptive title for YouTube videos
                 title = video_title
@@ -661,7 +670,7 @@ class ConnectorService:
                 url = f"https://www.youtube.com/watch?v={video_id}" if video_id else ""
 
                 source = {
-                    "id": self.source_id_counter,
+                    "id": document.get('id', self.source_id_counter),
                     "title": title,
                     "description": description,
                     "url": url,
@@ -720,17 +729,14 @@ class ConnectorService:
         # Process each chunk and create sources directly without deduplication
         sources_list = []
         async with self.counter_lock:
-            for i, chunk in enumerate(github_chunks):
-                # Fix for UI - assign a unique ID for citation/source tracking
-                github_chunks[i]['document']['id'] = self.source_id_counter
-                
+            for _i, chunk in enumerate(github_chunks):
                 # Extract document metadata
                 document = chunk.get('document', {})
                 metadata = document.get('metadata', {})
 
                 # Create a source entry
                 source = {
-                    "id": self.source_id_counter,
+                    "id": document.get('id', self.source_id_counter),
                     "title": document.get('title', 'GitHub Document'), # Use specific title if available
                     "description": metadata.get('description', chunk.get('content', '')[:100]), # Use description or content preview
                     "url": metadata.get('url', '') # Use URL if available in metadata
@@ -793,10 +799,7 @@ class ConnectorService:
         # Process each chunk and create sources directly without deduplication
         sources_list = []
         async with self.counter_lock:
-            for i, chunk in enumerate(linear_chunks):
-                # Fix for UI
-                linear_chunks[i]['document']['id'] = self.source_id_counter
-                
+            for _i, chunk in enumerate(linear_chunks):
                 # Extract document metadata
                 document = chunk.get('document', {})
                 metadata = document.get('metadata', {})
@@ -832,7 +835,7 @@ class ConnectorService:
                     url = f"https://linear.app/issue/{issue_identifier}"
 
                 source = {
-                    "id": self.source_id_counter,
+                    "id": document.get('id', self.source_id_counter),
                     "title": title,
                     "description": description,
                     "url": url,
@@ -959,3 +962,97 @@ class ConnectorService:
                 "type": "LINKUP_API",
                 "sources": [],
             }, []
+    
+    async def search_discord(self, user_query: str, user_id: str, search_space_id: int, top_k: int = 20, search_mode: SearchMode = SearchMode.CHUNKS) -> tuple:
+        """
+        Search for Discord messages and return both the source information and langchain documents
+        
+        Args:
+            user_query: The user's query
+            user_id: The user's ID
+            search_space_id: The search space ID to search in
+            top_k: Maximum number of results to return
+            
+        Returns:
+            tuple: (sources_info, langchain_documents)
+        """
+        if search_mode == SearchMode.CHUNKS:
+            discord_chunks = await self.chunk_retriever.hybrid_search(
+                query_text=user_query,
+                top_k=top_k,
+                user_id=user_id,
+                search_space_id=search_space_id,
+                document_type="DISCORD_CONNECTOR"
+            )
+        elif search_mode == SearchMode.DOCUMENTS:
+            discord_chunks = await self.document_retriever.hybrid_search(
+                query_text=user_query,
+                top_k=top_k,
+                user_id=user_id,
+                search_space_id=search_space_id,
+                document_type="DISCORD_CONNECTOR"
+            )
+            # Transform document retriever results to match expected format
+            discord_chunks = self._transform_document_results(discord_chunks)
+        
+        # Early return if no results
+        if not discord_chunks:
+            return {
+                "id": 11,
+                "name": "Discord",
+                "type": "DISCORD_CONNECTOR",
+                "sources": [],
+            }, []
+
+        # Process each chunk and create sources directly without deduplication
+        sources_list = []
+        async with self.counter_lock:
+            for i, chunk in enumerate(discord_chunks):
+                # Extract document metadata
+                document = chunk.get('document', {})
+                metadata = document.get('metadata', {})
+
+                # Create a mapped source entry with Discord-specific metadata
+                channel_name = metadata.get('channel_name', 'Unknown Channel')
+                channel_id = metadata.get('channel_id', '')
+                message_date = metadata.get('start_date', '')
+                
+                # Create a more descriptive title for Discord messages
+                title = f"Discord: {channel_name}"
+                if message_date:
+                    title += f" ({message_date})"
+                    
+                # Create a more descriptive description for Discord messages
+                description = chunk.get('content', '')[:100]
+                if len(description) == 100:
+                    description += "..."
+                    
+                url = ""
+                guild_id = metadata.get('guild_id', '')
+                if guild_id and channel_id:
+                    url = f"https://discord.com/channels/{guild_id}/{channel_id}"
+                elif channel_id:
+                    # Fallback for DM channels or when guild_id is not available
+                    url = f"https://discord.com/channels/@me/{channel_id}"
+
+                source = {
+                    "id": document.get('id', self.source_id_counter),
+                    "title": title,
+                    "description": description,
+                    "url": url,
+                }
+
+                self.source_id_counter += 1
+                sources_list.append(source)
+        
+        # Create result object
+        result_object = {
+            "id": 11,
+            "name": "Discord",
+            "type": "DISCORD_CONNECTOR",
+            "sources": sources_list,
+        }
+        
+        return result_object, discord_chunks
+
+
