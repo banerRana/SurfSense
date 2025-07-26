@@ -152,3 +152,9 @@
     --sidebar-ring: 217.2 91.2% 59.8%;
   }
 }
+
+button {
+  cursor: pointer;
+}
+
+@source '../node_modules/@llamaindex/chat-ui/**/*.{ts,tsx}'
