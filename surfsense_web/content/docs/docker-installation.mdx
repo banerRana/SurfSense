@@ -4,14 +4,7 @@ description: Setting up SurfSense using Docker
 full: true
 ---
 
-## Known Limitations
 
-⚠️ **Important Note:** Currently, the following features have limited functionality when running in Docker:
-
-- **Ollama integration:** Local Ollama models do not work when running SurfSense in Docker. Please use other LLM providers like OpenAI or Gemini instead.
-- **Web crawler functionality:** The web crawler feature currently doesn't work properly within the Docker environment.
-
-We're actively working to resolve these limitations in future releases.
 
 # Docker Installation
 
@@ -25,8 +18,10 @@ Before you begin, ensure you have:
 - [Git](https://git-scm.com/downloads) (to clone the repository)
 - Completed all the [prerequisite setup steps](/docs) including:
   - PGVector setup
-  - Google OAuth configuration
-  - Unstructured.io API key
+  - **File Processing ETL Service** (choose one):
+    - Unstructured.io API key (Supports 34+ formats)
+    - LlamaIndex API key (enhanced parsing, supports 50+ formats)
+    - Docling (local processing, no API key required, supports PDF, Office docs, images, HTML, CSV)
   - Other required API keys
 
 ## Installation Steps
@@ -82,36 +77,24 @@ Before you begin, ensure you have:
 | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | DATABASE_URL               | PostgreSQL connection string (e.g., `postgresql+asyncpg://postgres:postgres@localhost:5432/surfsense`)                                                                                    |
 | SECRET_KEY                 | JWT Secret key for authentication (should be a secure random string)                                                                                                                      |
-| AUTH_TYPE                  | Authentication method: `GOOGLE` for OAuth with Google, `LOCAL` for email/password authentication                                                                                          |
 | NEXT_FRONTEND_URL          | URL where your frontend application is hosted (e.g., `http://localhost:3000`)                                                                                                             |
-| EMBEDDING_MODEL            | Name of the embedding model (e.g., `openai://text-embedding-ada-002`, `anthropic://claude-v1`, `mixedbread-ai/mxbai-embed-large-v1`)                                                      |
+| AUTH_TYPE                  | Authentication method: `GOOGLE` for OAuth with Google, `LOCAL` for email/password authentication                                                                                          |
+| GOOGLE_OAUTH_CLIENT_ID     | (Optional) Client ID from Google Cloud Console (required if AUTH_TYPE=GOOGLE)                                                                                                                        |
+| GOOGLE_OAUTH_CLIENT_SECRET | (Optional) Client secret from Google Cloud Console (required if AUTH_TYPE=GOOGLE)                                                                                                                    |
+| EMBEDDING_MODEL            | Name of the embedding model (e.g., `mixedbread-ai/mxbai-embed-large-v1`)                                                                                                                 |
 | RERANKERS_MODEL_NAME       | Name of the reranker model (e.g., `ms-marco-MiniLM-L-12-v2`)                                                                                                                              |
 | RERANKERS_MODEL_TYPE       | Type of reranker model (e.g., `flashrank`)                                                                                                                                                |
-| FAST_LLM                   | LiteLLM routed smaller, faster LLM (e.g., `openai/gpt-4o-mini`, `ollama/deepseek-r1:8b`)                                                                                                  |
-| STRATEGIC_LLM              | LiteLLM routed advanced LLM for complex tasks (e.g., `openai/gpt-4o`, `ollama/gemma3:12b`)                                                                                                |
-| LONG_CONTEXT_LLM           | LiteLLM routed LLM for longer context windows (e.g., `gemini/gemini-2.0-flash`, `ollama/deepseek-r1:8b`)                                                                                  |
-| ETL_SERVICE                | Document parsing service: `UNSTRUCTURED` (supports 34+ formats) or `LLAMACLOUD` (supports 50+ formats including legacy document types)                                                  |
+| TTS_SERVICE                | Text-to-Speech API provider for Podcasts (e.g., `openai/tts-1`). See [supported providers](https://docs.litellm.ai/docs/text_to_speech#supported-providers)                            |
+| TTS_SERVICE_API_KEY        | API key for the Text-to-Speech service                                                                                                                                                    |
+| TTS_SERVICE_API_BASE       | (Optional) Custom API base URL for the Text-to-Speech service                                                                                                                           |
+| STT_SERVICE                | Speech-to-Text API provider for Podcasts (e.g., `openai/whisper-1`). See [supported providers](https://docs.litellm.ai/docs/audio_transcription#supported-providers)                   |
+| STT_SERVICE_API_KEY        | API key for the Speech-to-Text service                                                                                                                                                    |
+| STT_SERVICE_API_BASE       | (Optional) Custom API base URL for the Speech-to-Text service                                                                                                                      |
+| FIRECRAWL_API_KEY          | API key for Firecrawl service for web crawling                                                                                                                                            |
+| ETL_SERVICE                | Document parsing service: `UNSTRUCTURED` (supports 34+ formats), `LLAMACLOUD` (supports 50+ formats including legacy document types), or `DOCLING` (local processing, supports PDF, Office docs, images, HTML, CSV)                                                  |
 | UNSTRUCTURED_API_KEY       | API key for Unstructured.io service for document parsing (required if ETL_SERVICE=UNSTRUCTURED)                                                                                           |
 | LLAMA_CLOUD_API_KEY        | API key for LlamaCloud service for document parsing (required if ETL_SERVICE=LLAMACLOUD)                                                                                                  |
-| FIRECRAWL_API_KEY          | API key for Firecrawl service for web crawling                                                                                                                                            |
-| TTS_SERVICE                | Text-to-Speech API provider for Podcasts (e.g., `openai/tts-1`, `azure/neural`, `vertex_ai/`). See [supported providers](https://docs.litellm.ai/docs/text_to_speech#supported-providers) |
-| STT_SERVICE                | Speech-to-Text API provider for Podcasts (e.g., `openai/whisper-1`). See [supported providers](https://docs.litellm.ai/docs/audio_transcription#supported-providers)                      |
 
-
-Include API keys for your chosen LLM providers:
-
-| ENV VARIABLE       | DESCRIPTION                                                                 |
-|--------------------|-----------------------------------------------------------------------------|
-| `OPENAI_API_KEY`   | Required if using OpenAI models                                             |
-| `GEMINI_API_KEY`   | Required if using Google Gemini models                                      |
-| `ANTHROPIC_API_KEY`| Required if using Anthropic models                                          |
-
-### Google OAuth Configuration (if AUTH_TYPE=GOOGLE)
-
-| ENV VARIABLE               | DESCRIPTION                                                                 |
-|----------------------------|-----------------------------------------------------------------------------|
-| `GOOGLE_OAUTH_CLIENT_ID`   | Client ID from Google Cloud Console                                         |
-| `GOOGLE_OAUTH_CLIENT_SECRET` | Client secret from Google Cloud Console                                   |
 
 **Optional Backend LangSmith Observability:**
 | ENV VARIABLE | DESCRIPTION |
@@ -121,16 +104,41 @@ Include API keys for your chosen LLM providers:
 | LANGSMITH_API_KEY | Your LangSmith API key |
 | LANGSMITH_PROJECT | LangSmith project name (e.g., `surfsense`) |
 
-**Optional Backend LiteLLM API Base URLs:**
-| ENV VARIABLE | DESCRIPTION |
-|--------------|-------------|
-| FAST_LLM_API_BASE | Custom API base URL for the fast LLM |
-| STRATEGIC_LLM_API_BASE | Custom API base URL for the strategic LLM |
-| LONG_CONTEXT_LLM_API_BASE | Custom API base URL for the long context LLM |
-| TTS_SERVICE_API_BASE | Custom API base URL for the Text-to-Speech (TTS) service |
-| STT_SERVICE_API_BASE | Custom API base URL for the Speech-to-Text (STT) service |
+**Backend Uvicorn Server Configuration:**
+| ENV VARIABLE | DESCRIPTION | DEFAULT VALUE |
+|------------------------------|---------------------------------------------|---------------|
+| UVICORN_HOST                 | Host address to bind the server             | 0.0.0.0       |
+| UVICORN_PORT                 | Port to run the backend API                 | 8000          |
+| UVICORN_LOG_LEVEL            | Logging level (e.g., info, debug, warning)  | info          |
+| UVICORN_PROXY_HEADERS        | Enable/disable proxy headers                | false         |
+| UVICORN_FORWARDED_ALLOW_IPS  | Comma-separated list of allowed IPs         | 127.0.0.1     |
+| UVICORN_WORKERS              | Number of worker processes                  | 1             |
+| UVICORN_ACCESS_LOG           | Enable/disable access log (true/false)      | true          |
+| UVICORN_LOOP                 | Event loop implementation                   | auto          |
+| UVICORN_HTTP                 | HTTP protocol implementation                | auto          |
+| UVICORN_WS                   | WebSocket protocol implementation           | auto          |
+| UVICORN_LIFESPAN             | Lifespan implementation                     | auto          |
+| UVICORN_LOG_CONFIG           | Path to logging config file or empty string |               |
+| UVICORN_SERVER_HEADER        | Enable/disable Server header                | true          |
+| UVICORN_DATE_HEADER          | Enable/disable Date header                  | true          |
+| UVICORN_LIMIT_CONCURRENCY    | Max concurrent connections                  |               |
+| UVICORN_LIMIT_MAX_REQUESTS   | Max requests before worker restart          |               |
+| UVICORN_TIMEOUT_KEEP_ALIVE   | Keep-alive timeout (seconds)                | 5             |
+| UVICORN_TIMEOUT_NOTIFY       | Worker shutdown notification timeout (sec)  | 30            |
+| UVICORN_SSL_KEYFILE          | Path to SSL key file                        |               |
+| UVICORN_SSL_CERTFILE         | Path to SSL certificate file                |               |
+| UVICORN_SSL_KEYFILE_PASSWORD | Password for SSL key file                   |               |
+| UVICORN_SSL_VERSION          | SSL version                                 |               |
+| UVICORN_SSL_CERT_REQS        | SSL certificate requirements                |               |
+| UVICORN_SSL_CA_CERTS         | Path to CA certificates file                |               |
+| UVICORN_SSL_CIPHERS          | SSL ciphers                                 |               |
+| UVICORN_HEADERS              | Comma-separated list of headers             |               |
+| UVICORN_USE_COLORS           | Enable/disable colored logs                 | true          |
+| UVICORN_UDS                  | Unix domain socket path                     |               |
+| UVICORN_FD                   | File descriptor to bind to                  |               |
+| UVICORN_ROOT_PATH            | Root path for the application               |               |
 
-For other LLM providers, refer to the [LiteLLM documentation](https://docs.litellm.ai/docs/providers).
+For more details, see the [Uvicorn documentation](https://www.uvicorn.org/#command-line-options).
 
 ### Frontend Environment Variables
 
@@ -138,7 +146,7 @@ For other LLM providers, refer to the [LiteLLM documentation](https://docs.litel
 | ------------------------------- | ---------------------------------------------------------- |
 | NEXT_PUBLIC_FASTAPI_BACKEND_URL | URL of the backend service (e.g., `http://localhost:8000`) |
 | NEXT_PUBLIC_FASTAPI_BACKEND_AUTH_TYPE | Same value as set in backend AUTH_TYPE i.e `GOOGLE` for OAuth with Google, `LOCAL` for email/password authentication  |
-| NEXT_PUBLIC_ETL_SERVICE         | Document parsing service (should match backend ETL_SERVICE): `UNSTRUCTURED` or `LLAMACLOUD` - affects supported file formats in upload interface |
+| NEXT_PUBLIC_ETL_SERVICE         | Document parsing service (should match backend ETL_SERVICE): `UNSTRUCTURED`, `LLAMACLOUD`, or `DOCLING` - affects supported file formats in upload interface |
 
 2. **Build and Start Containers**
 

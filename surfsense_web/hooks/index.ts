@@ -1,1 +1,2 @@
-export * from './useSearchSourceConnectors'; 
+export * from "./use-logs";
+export * from "./useSearchSourceConnectors";
