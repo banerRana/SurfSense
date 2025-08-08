@@ -1,12 +1,15 @@
 "use client";
 
-import React, { useEffect } from "react";
-import { useRouter, useParams } from "next/navigation";
 import { motion } from "framer-motion";
+import { ArrowLeft, Check, Loader2 } from "lucide-react";
+import { useParams, useRouter } from "next/navigation";
+import { useEffect } from "react";
 import { toast } from "sonner";
-import { ArrowLeft, Check, Loader2, Github } from "lucide-react";
-
-import { Form } from "@/components/ui/form";
+import { getConnectorIcon } from "@/components/chat";
+import { EditConnectorLoadingSkeleton } from "@/components/editConnector/EditConnectorLoadingSkeleton";
+import { EditConnectorNameForm } from "@/components/editConnector/EditConnectorNameForm";
+import { EditGitHubConnectorConfig } from "@/components/editConnector/EditGitHubConnectorConfig";
+import { EditSimpleTokenForm } from "@/components/editConnector/EditSimpleTokenForm";
 import { Button } from "@/components/ui/button";
 import {
 	Card,
@@ -16,15 +19,10 @@ import {
 	CardHeader,
 	CardTitle,
 } from "@/components/ui/card";
-
+import { Form } from "@/components/ui/form";
+import { useConnectorEditPage } from "@/hooks/useConnectorEditPage";
 // Import Utils, Types, Hook, and Components
 import { getConnectorTypeDisplay } from "@/lib/connectors/utils";
-import { useConnectorEditPage } from "@/hooks/useConnectorEditPage";
-import { EditConnectorLoadingSkeleton } from "@/components/editConnector/EditConnectorLoadingSkeleton";
-import { EditConnectorNameForm } from "@/components/editConnector/EditConnectorNameForm";
-import { EditGitHubConnectorConfig } from "@/components/editConnector/EditGitHubConnectorConfig";
-import { EditSimpleTokenForm } from "@/components/editConnector/EditSimpleTokenForm";
-import { getConnectorIcon } from "@/components/chat";
 
 export default function EditConnectorPage() {
 	const router = useRouter();
@@ -58,7 +56,7 @@ export default function EditConnectorPage() {
 
 	// Redirect if connectorId is not a valid number after parsing
 	useEffect(() => {
-		if (isNaN(connectorId)) {
+		if (Number.isNaN(connectorId)) {
 			toast.error("Invalid Connector ID.");
 			router.push(`/dashboard/${searchSpaceId}/connectors`);
 		}
@@ -67,7 +65,7 @@ export default function EditConnectorPage() {
 	// Loading State
 	if (connectorsLoading || !connector) {
 		// Handle NaN case before showing skeleton
-		if (isNaN(connectorId)) return null;
+		if (Number.isNaN(connectorId)) return null;
 		return <EditConnectorLoadingSkeleton />;
 	}
 
@@ -93,17 +91,12 @@ export default function EditConnectorPage() {
 							{getConnectorIcon(connector.connector_type)}
 							Edit {getConnectorTypeDisplay(connector.connector_type)} Connector
 						</CardTitle>
-						<CardDescription>
-							Modify connector name and configuration.
-						</CardDescription>
+						<CardDescription>Modify connector name and configuration.</CardDescription>
 					</CardHeader>
 
 					<Form {...editForm}>
 						{/* Pass hook's handleSaveChanges */}
-						<form
-							onSubmit={editForm.handleSubmit(handleSaveChanges)}
-							className="space-y-6"
-						>
+						<form onSubmit={editForm.handleSubmit(handleSaveChanges)} className="space-y-6">
 							<CardContent className="space-y-6">
 								{/* Pass form control from hook */}
 								<EditConnectorNameForm control={editForm.control} />
@@ -181,6 +174,71 @@ export default function EditConnectorPage() {
 									/>
 								)}
 
+								{/* == Jira == */}
+								{connector.connector_type === "JIRA_CONNECTOR" && (
+									<div className="space-y-4">
+										<EditSimpleTokenForm
+											control={editForm.control}
+											fieldName="JIRA_BASE_URL"
+											fieldLabel="Jira Base URL"
+											fieldDescription="Update your Jira instance URL if needed."
+											placeholder="https://yourcompany.atlassian.net"
+										/>
+										<EditSimpleTokenForm
+											control={editForm.control}
+											fieldName="JIRA_EMAIL"
+											fieldLabel="Jira Email"
+											fieldDescription="Update your Atlassian account email if needed."
+											placeholder="your.email@company.com"
+										/>
+										<EditSimpleTokenForm
+											control={editForm.control}
+											fieldName="JIRA_API_TOKEN"
+											fieldLabel="Jira API Token"
+											fieldDescription="Update your Jira API Token if needed."
+											placeholder="Your Jira API Token"
+										/>
+									</div>
+								)}
+
+								{/* == Confluence == */}
+								{connector.connector_type === "CONFLUENCE_CONNECTOR" && (
+									<div className="space-y-4">
+										<EditSimpleTokenForm
+											control={editForm.control}
+											fieldName="CONFLUENCE_BASE_URL"
+											fieldLabel="Confluence Base URL"
+											fieldDescription="Update your Confluence instance URL if needed."
+											placeholder="https://yourcompany.atlassian.net"
+										/>
+										<EditSimpleTokenForm
+											control={editForm.control}
+											fieldName="CONFLUENCE_EMAIL"
+											fieldLabel="Confluence Email"
+											fieldDescription="Update your Atlassian account email if needed."
+											placeholder="your.email@company.com"
+										/>
+										<EditSimpleTokenForm
+											control={editForm.control}
+											fieldName="CONFLUENCE_API_TOKEN"
+											fieldLabel="Confluence API Token"
+											fieldDescription="Update your Confluence API Token if needed."
+											placeholder="Your Confluence API Token"
+										/>
+									</div>
+								)}
+
+								{/* == ClickUp == */}
+								{connector.connector_type === "CLICKUP_CONNECTOR" && (
+									<EditSimpleTokenForm
+										control={editForm.control}
+										fieldName="CLICKUP_API_TOKEN"
+										fieldLabel="ClickUp API Token"
+										fieldDescription="Update your ClickUp API Token if needed."
+										placeholder="pk_..."
+									/>
+								)}
+
 								{/* == Linkup == */}
 								{connector.connector_type === "LINKUP_API" && (
 									<EditSimpleTokenForm
@@ -191,13 +249,20 @@ export default function EditConnectorPage() {
 										placeholder="Begins with linkup_..."
 									/>
 								)}
+
+								{/* == Discord == */}
+								{connector.connector_type === "DISCORD_CONNECTOR" && (
+									<EditSimpleTokenForm
+										control={editForm.control}
+										fieldName="DISCORD_BOT_TOKEN"
+										fieldLabel="Discord Bot Token"
+										fieldDescription="Update the Discord Bot Token if needed."
+										placeholder="Bot token..."
+									/>
+								)}
 							</CardContent>
 							<CardFooter className="border-t pt-6">
-								<Button
-									type="submit"
-									disabled={isSaving}
-									className="w-full sm:w-auto"
-								>
+								<Button type="submit" disabled={isSaving} className="w-full sm:w-auto">
 									{isSaving ? (
 										<Loader2 className="mr-2 h-4 w-4 animate-spin" />
 									) : (

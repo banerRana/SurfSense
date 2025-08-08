@@ -1,36 +1,12 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { useRouter, useParams } from "next/navigation";
+import { format } from "date-fns";
 import { motion } from "framer-motion";
+import { Calendar as CalendarIcon, Edit, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { useParams, useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import {
-	Edit,
-	Plus,
-	Search,
-	Trash2,
-	ExternalLink,
-	RefreshCw,
-} from "lucide-react";
-
-import { useSearchSourceConnectors } from "@/hooks/useSearchSourceConnectors";
-import { Button } from "@/components/ui/button";
-import {
-	Card,
-	CardContent,
-	CardDescription,
-	CardFooter,
-	CardHeader,
-	CardTitle,
-} from "@/components/ui/card";
-import {
-	Table,
-	TableBody,
-	TableCell,
-	TableHead,
-	TableHeader,
-	TableRow,
-} from "@/components/ui/table";
+import { getConnectorIcon } from "@/components/chat";
 import {
 	AlertDialog,
 	AlertDialogAction,
@@ -42,28 +18,30 @@ import {
 	AlertDialogTitle,
 	AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import { Button } from "@/components/ui/button";
+import { Calendar } from "@/components/ui/calendar";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
-	Tooltip,
-	TooltipContent,
-	TooltipProvider,
-	TooltipTrigger,
-} from "@/components/ui/tooltip";
-import { getConnectorIcon } from "@/components/chat";
-
-// Helper function to get connector type display name
-const getConnectorTypeDisplay = (type: string): string => {
-	const typeMap: Record<string, string> = {
-		SERPER_API: "Serper API",
-		TAVILY_API: "Tavily API",
-		SLACK_CONNECTOR: "Slack",
-		NOTION_CONNECTOR: "Notion",
-		GITHUB_CONNECTOR: "GitHub",
-		LINEAR_CONNECTOR: "Linear",
-		LINKUP_API: "Linkup",
-		// Add other connector types here as needed
-	};
-	return typeMap[type] || type;
-};
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
+} from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+	Table,
+	TableBody,
+	TableCell,
+	TableHead,
+	TableHeader,
+	TableRow,
+} from "@/components/ui/table";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { useSearchSourceConnectors } from "@/hooks/useSearchSourceConnectors";
+import { cn } from "@/lib/utils";
 
 // Helper function to format date with time
 const formatDateTime = (dateString: string | null): string => {
@@ -86,12 +64,14 @@ export default function ConnectorsPage() {
 
 	const { connectors, isLoading, error, deleteConnector, indexConnector } =
 		useSearchSourceConnectors();
-	const [connectorToDelete, setConnectorToDelete] = useState<number | null>(
-		null,
+	const [connectorToDelete, setConnectorToDelete] = useState<number | null>(null);
+	const [indexingConnectorId, setIndexingConnectorId] = useState<number | null>(null);
+	const [datePickerOpen, setDatePickerOpen] = useState(false);
+	const [selectedConnectorForIndexing, setSelectedConnectorForIndexing] = useState<number | null>(
+		null
 	);
-	const [indexingConnectorId, setIndexingConnectorId] = useState<number | null>(
-		null,
-	);
+	const [startDate, setStartDate] = useState<Date | undefined>(undefined);
+	const [endDate, setEndDate] = useState<Date | undefined>(undefined);
 
 	useEffect(() => {
 		if (error) {
@@ -115,19 +95,45 @@ export default function ConnectorsPage() {
 		}
 	};
 
-	// Handle connector indexing
-	const handleIndexConnector = async (connectorId: number) => {
+	// Handle opening date picker for indexing
+	const handleOpenDatePicker = (connectorId: number) => {
+		setSelectedConnectorForIndexing(connectorId);
+		setDatePickerOpen(true);
+	};
+
+	// Handle connector indexing with dates
+	const handleIndexConnector = async () => {
+		if (selectedConnectorForIndexing === null) return;
+
+		setDatePickerOpen(false);
+
+		try {
+			setIndexingConnectorId(selectedConnectorForIndexing);
+			const startDateStr = startDate ? format(startDate, "yyyy-MM-dd") : undefined;
+			const endDateStr = endDate ? format(endDate, "yyyy-MM-dd") : undefined;
+
+			await indexConnector(selectedConnectorForIndexing, searchSpaceId, startDateStr, endDateStr);
+			toast.success("Connector content indexing started");
+		} catch (error) {
+			console.error("Error indexing connector content:", error);
+			toast.error(error instanceof Error ? error.message : "Failed to index connector content");
+		} finally {
+			setIndexingConnectorId(null);
+			setSelectedConnectorForIndexing(null);
+			setStartDate(undefined);
+			setEndDate(undefined);
+		}
+	};
+
+	// Handle indexing without date picker (for quick indexing)
+	const handleQuickIndexConnector = async (connectorId: number) => {
 		setIndexingConnectorId(connectorId);
 		try {
 			await indexConnector(connectorId, searchSpaceId);
-			toast.success("Connector content indexed successfully");
+			toast.success("Connector content indexing started");
 		} catch (error) {
 			console.error("Error indexing connector content:", error);
-			toast.error(
-				error instanceof Error
-					? error.message
-					: "Failed to index connector content",
-			);
+			toast.error(error instanceof Error ? error.message : "Failed to index connector content");
 		} finally {
 			setIndexingConnectorId(null);
 		}
@@ -147,11 +153,7 @@ export default function ConnectorsPage() {
 						Manage your connected services and data sources.
 					</p>
 				</div>
-				<Button
-					onClick={() =>
-						router.push(`/dashboard/${searchSpaceId}/connectors/add`)
-					}
-				>
+				<Button onClick={() => router.push(`/dashboard/${searchSpaceId}/connectors/add`)}>
 					<Plus className="mr-2 h-4 w-4" />
 					Add Connector
 				</Button>
@@ -160,9 +162,7 @@ export default function ConnectorsPage() {
 			<Card>
 				<CardHeader className="pb-3">
 					<CardTitle>Your Connectors</CardTitle>
-					<CardDescription>
-						View and manage all your connected services.
-					</CardDescription>
+					<CardDescription>View and manage all your connected services.</CardDescription>
 				</CardHeader>
 				<CardContent>
 					{isLoading ? (
@@ -176,14 +176,9 @@ export default function ConnectorsPage() {
 						<div className="text-center py-12">
 							<h3 className="text-lg font-medium mb-2">No connectors found</h3>
 							<p className="text-muted-foreground mb-6">
-								You haven't added any connectors yet. Add one to enhance your
-								search capabilities.
+								You haven't added any connectors yet. Add one to enhance your search capabilities.
 							</p>
-							<Button
-								onClick={() =>
-									router.push(`/dashboard/${searchSpaceId}/connectors/add`)
-								}
-							>
+							<Button onClick={() => router.push(`/dashboard/${searchSpaceId}/connectors/add`)}>
 								<Plus className="mr-2 h-4 w-4" />
 								Add Your First Connector
 							</Button>
@@ -202,12 +197,8 @@ export default function ConnectorsPage() {
 								<TableBody>
 									{connectors.map((connector) => (
 										<TableRow key={connector.id}>
-											<TableCell className="font-medium">
-												{connector.name}
-											</TableCell>
-											<TableCell>
-												{getConnectorIcon(connector.connector_type)}
-											</TableCell>
+											<TableCell className="font-medium">{connector.name}</TableCell>
+											<TableCell>{getConnectorIcon(connector.connector_type)}</TableCell>
 											<TableCell>
 												{connector.is_indexable
 													? formatDateTime(connector.last_indexed_at)
@@ -216,41 +207,59 @@ export default function ConnectorsPage() {
 											<TableCell className="text-right">
 												<div className="flex justify-end gap-2">
 													{connector.is_indexable && (
-														<TooltipProvider>
-															<Tooltip>
-																<TooltipTrigger asChild>
-																	<Button
-																		variant="outline"
-																		size="sm"
-																		onClick={() =>
-																			handleIndexConnector(connector.id)
-																		}
-																		disabled={
-																			indexingConnectorId === connector.id
-																		}
-																	>
-																		{indexingConnectorId === connector.id ? (
-																			<RefreshCw className="h-4 w-4 animate-spin" />
-																		) : (
-																			<RefreshCw className="h-4 w-4" />
-																		)}
-																		<span className="sr-only">
-																			Index Content
-																		</span>
-																	</Button>
-																</TooltipTrigger>
-																<TooltipContent>
-																	<p>Index Content</p>
-																</TooltipContent>
-															</Tooltip>
-														</TooltipProvider>
+														<div className="flex gap-1">
+															<TooltipProvider>
+																<Tooltip>
+																	<TooltipTrigger asChild>
+																		<Button
+																			variant="outline"
+																			size="sm"
+																			onClick={() => handleOpenDatePicker(connector.id)}
+																			disabled={indexingConnectorId === connector.id}
+																		>
+																			{indexingConnectorId === connector.id ? (
+																				<RefreshCw className="h-4 w-4 animate-spin" />
+																			) : (
+																				<CalendarIcon className="h-4 w-4" />
+																			)}
+																			<span className="sr-only">Index with Date Range</span>
+																		</Button>
+																	</TooltipTrigger>
+																	<TooltipContent>
+																		<p>Index with Date Range</p>
+																	</TooltipContent>
+																</Tooltip>
+															</TooltipProvider>
+															<TooltipProvider>
+																<Tooltip>
+																	<TooltipTrigger asChild>
+																		<Button
+																			variant="outline"
+																			size="sm"
+																			onClick={() => handleQuickIndexConnector(connector.id)}
+																			disabled={indexingConnectorId === connector.id}
+																		>
+																			{indexingConnectorId === connector.id ? (
+																				<RefreshCw className="h-4 w-4 animate-spin" />
+																			) : (
+																				<RefreshCw className="h-4 w-4" />
+																			)}
+																			<span className="sr-only">Quick Index</span>
+																		</Button>
+																	</TooltipTrigger>
+																	<TooltipContent>
+																		<p>Quick Index (Auto Date Range)</p>
+																	</TooltipContent>
+																</Tooltip>
+															</TooltipProvider>
+														</div>
 													)}
 													<Button
 														variant="outline"
 														size="sm"
 														onClick={() =>
 															router.push(
-																`/dashboard/${searchSpaceId}/connectors/${connector.id}/edit`,
+																`/dashboard/${searchSpaceId}/connectors/${connector.id}/edit`
 															)
 														}
 													>
@@ -263,9 +272,7 @@ export default function ConnectorsPage() {
 																variant="outline"
 																size="sm"
 																className="text-destructive-foreground hover:bg-destructive/10"
-																onClick={() =>
-																	setConnectorToDelete(connector.id)
-																}
+																onClick={() => setConnectorToDelete(connector.id)}
 															>
 																<Trash2 className="h-4 w-4" />
 																<span className="sr-only">Delete</span>
@@ -273,18 +280,14 @@ export default function ConnectorsPage() {
 														</AlertDialogTrigger>
 														<AlertDialogContent>
 															<AlertDialogHeader>
-																<AlertDialogTitle>
-																	Delete Connector
-																</AlertDialogTitle>
+																<AlertDialogTitle>Delete Connector</AlertDialogTitle>
 																<AlertDialogDescription>
-																	Are you sure you want to delete this
-																	connector? This action cannot be undone.
+																	Are you sure you want to delete this connector? This action cannot
+																	be undone.
 																</AlertDialogDescription>
 															</AlertDialogHeader>
 															<AlertDialogFooter>
-																<AlertDialogCancel
-																	onClick={() => setConnectorToDelete(null)}
-																>
+																<AlertDialogCancel onClick={() => setConnectorToDelete(null)}>
 																	Cancel
 																</AlertDialogCancel>
 																<AlertDialogAction
@@ -306,6 +309,130 @@ export default function ConnectorsPage() {
 					)}
 				</CardContent>
 			</Card>
+
+			{/* Date Picker Dialog */}
+			<Dialog open={datePickerOpen} onOpenChange={setDatePickerOpen}>
+				<DialogContent className="sm:max-w-[500px]">
+					<DialogHeader>
+						<DialogTitle>Select Date Range for Indexing</DialogTitle>
+						<DialogDescription>
+							Choose the start and end dates for indexing content. Leave empty to use default range.
+						</DialogDescription>
+					</DialogHeader>
+					<div className="grid gap-4 py-4">
+						<div className="grid grid-cols-2 gap-4">
+							<div className="space-y-2">
+								<Label htmlFor="start-date">Start Date</Label>
+								<Popover>
+									<PopoverTrigger asChild>
+										<Button
+											id="start-date"
+											variant="outline"
+											className={cn(
+												"w-full justify-start text-left font-normal",
+												!startDate && "text-muted-foreground"
+											)}
+										>
+											<CalendarIcon className="mr-2 h-4 w-4" />
+											{startDate ? format(startDate, "PPP") : "Pick a date"}
+										</Button>
+									</PopoverTrigger>
+									<PopoverContent className="w-auto p-0" align="start">
+										<Calendar
+											mode="single"
+											selected={startDate}
+											onSelect={setStartDate}
+											disabled={(date) => date > new Date() || (endDate ? date > endDate : false)}
+											initialFocus
+										/>
+									</PopoverContent>
+								</Popover>
+							</div>
+							<div className="space-y-2">
+								<Label htmlFor="end-date">End Date</Label>
+								<Popover>
+									<PopoverTrigger asChild>
+										<Button
+											id="end-date"
+											variant="outline"
+											className={cn(
+												"w-full justify-start text-left font-normal",
+												!endDate && "text-muted-foreground"
+											)}
+										>
+											<CalendarIcon className="mr-2 h-4 w-4" />
+											{endDate ? format(endDate, "PPP") : "Pick a date"}
+										</Button>
+									</PopoverTrigger>
+									<PopoverContent className="w-auto p-0" align="start">
+										<Calendar
+											mode="single"
+											selected={endDate}
+											onSelect={setEndDate}
+											disabled={(date) =>
+												date > new Date() || (startDate ? date < startDate : false)
+											}
+											initialFocus
+										/>
+									</PopoverContent>
+								</Popover>
+							</div>
+						</div>
+						<div className="flex gap-2">
+							<Button
+								variant="outline"
+								size="sm"
+								onClick={() => {
+									setStartDate(undefined);
+									setEndDate(undefined);
+								}}
+							>
+								Clear Dates
+							</Button>
+							<Button
+								variant="outline"
+								size="sm"
+								onClick={() => {
+									const today = new Date();
+									const thirtyDaysAgo = new Date(today);
+									thirtyDaysAgo.setDate(today.getDate() - 30);
+									setStartDate(thirtyDaysAgo);
+									setEndDate(today);
+								}}
+							>
+								Last 30 Days
+							</Button>
+							<Button
+								variant="outline"
+								size="sm"
+								onClick={() => {
+									const today = new Date();
+									const yearAgo = new Date(today);
+									yearAgo.setFullYear(today.getFullYear() - 1);
+									setStartDate(yearAgo);
+									setEndDate(today);
+								}}
+							>
+								Last Year
+							</Button>
+						</div>
+					</div>
+					<DialogFooter>
+						<Button
+							variant="outline"
+							onClick={() => {
+								setDatePickerOpen(false);
+								setSelectedConnectorForIndexing(null);
+								setStartDate(undefined);
+								setEndDate(undefined);
+							}}
+						>
+							Cancel
+						</Button>
+						<Button onClick={handleIndexConnector}>Start Indexing</Button>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
 		</div>
 	);
 }
